@@ -1,0 +1,47 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    font-family: 'Inter', sans-serif;
+    @apply bg-slate-950 text-slate-100;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-slate-900;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-slate-700 rounded;
+  }
+}
+
+@layer components {
+  .panel {
+    @apply bg-slate-900 border border-slate-800 rounded-xl flex flex-col overflow-hidden;
+  }
+
+  .panel-header {
+    @apply px-4 py-3 border-b border-slate-800 flex items-center gap-2 text-sm font-semibold text-slate-300 shrink-0;
+  }
+
+  .btn-primary {
+    @apply bg-brand-600 hover:bg-brand-700 text-white font-medium py-2 px-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-ghost {
+    @apply text-slate-400 hover:text-slate-100 hover:bg-slate-800 rounded-lg p-2 transition-colors;
+  }
+
+  .input-field {
+    @apply bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 placeholder-slate-500 focus:outline-none focus:border-brand-400 focus:ring-1 focus:ring-brand-400 transition-colors w-full;
+  }
+
+  .log-line {
+    @apply font-mono text-xs py-0.5 px-2 rounded;
+  }
+}
