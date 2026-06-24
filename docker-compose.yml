@@ -6,6 +6,11 @@ services:
       - mongo_data:/data/db
     ports:
       - "27017:27017"
+#    healthcheck:
+#      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+#      interval: 10s
+#      timeout: 5s
+#      retries: 5
 
   qdrant:
     image: qdrant/qdrant:v1.9.4
@@ -17,6 +22,7 @@ services:
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
       interval: 10s
+      timeout: 5s
       retries: 5
 
   backend:
@@ -35,6 +41,7 @@ services:
       - "8000:8000"
     volumes:
       - uploads_data:/tmp/docutrust_uploads
+      - hf_cache:/root/.cache/huggingface
 
   frontend:
     build: ./frontend
@@ -48,3 +55,4 @@ volumes:
   mongo_data:
   qdrant_data:
   uploads_data:
+  hf_cache:

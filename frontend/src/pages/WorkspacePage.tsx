@@ -8,9 +8,14 @@ import { useAuth } from "../hooks/useAuth";
 export function WorkspacePage() {
   const { user, logout } = useAuth();
   const [agentLogs, setAgentLogs] = useState<string[]>([]);
+  const [wsConnected, setWsConnected] = useState(false);
 
   const handleNewLogs = useCallback((logs: string[]) => {
     setAgentLogs(logs);
+  }, []);
+
+  const handleConnectionChange = useCallback((connected: boolean) => {
+    setWsConnected(connected);
   }, []);
 
   const clearLogs = useCallback(() => setAgentLogs([]), []);
@@ -46,14 +51,17 @@ export function WorkspacePage() {
         <div className="w-80 shrink-0">
           <AgentLogPanel
             logs={agentLogs}
-            isConnected={true}
+            isConnected={wsConnected}
             onClear={clearLogs}
           />
         </div>
 
         {/* Right: Chat */}
         <div className="flex-1 min-w-0">
-          <ChatPanel onLogsUpdate={handleNewLogs} />
+          <ChatPanel
+            onLogsUpdate={handleNewLogs}
+            onConnectionChange={handleConnectionChange}
+          />
         </div>
       </div>
     </div>

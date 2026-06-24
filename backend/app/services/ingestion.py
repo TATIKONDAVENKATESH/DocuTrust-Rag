@@ -27,7 +27,7 @@ async def ingest_document(
     1. Extract text with page numbers
     2. Chunk text
     3. Embed chunks
-    4. Store in Qdrant (chunk_id in both id and payload for retrieval)
+    4. Store in Qdrant (chunk_id UUID in id field, also in payload for citation lookups)
     5. Store chunk metadata in MongoDB
     Returns total number of chunks stored.
     """
@@ -68,13 +68,14 @@ async def ingest_document(
         loop = asyncio.get_running_loop()
         embeddings = await loop.run_in_executor(None, embed_texts, texts)
 
-        # 4: Upsert to Qdrant — include chunk_id in payload for citation lookups
+        # 4: Upsert to Qdrant
+        # IMPORTANT: qdrant-client 1.9.x requires id to be int or uuid.UUID (not str)
         points = [
             PointStruct(
-                id=chunk.chunk_id,
+                id=uuid.UUID(chunk.chunk_id),   # ← must be uuid.UUID, not raw string
                 vector=embeddings[i],
                 payload={
-                    "chunk_id": chunk.chunk_id,          # ← stored in payload too
+                    "chunk_id": chunk.chunk_id,
                     "document_id": chunk.document_id,
                     "filename": chunk.filename,
                     "text": chunk.text,

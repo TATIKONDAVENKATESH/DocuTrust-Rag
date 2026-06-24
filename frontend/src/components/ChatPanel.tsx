@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, FormEvent, useCallback } from "react";
 import { MessageSquare, Send, User, Bot, Loader2, AlertCircle } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { CitationList } from "./CitationList";
 import type { Citation } from "../types";
 import { useWebSocket } from "../hooks/useWebSocket";
@@ -16,20 +17,26 @@ interface Message {
 
 interface ChatPanelProps {
   onLogsUpdate: (logs: string[]) => void;
+  onConnectionChange: (connected: boolean) => void;
 }
 
-export function ChatPanel({ onLogsUpdate }: ChatPanelProps) {
+export function ChatPanel({ onLogsUpdate, onConnectionChange }: ChatPanelProps) {
   const { token } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  const { sendQuery, logs, isBusy, clearLogs } = useWebSocket(token);
+  const { sendQuery, logs, isConnected, isBusy, clearLogs } = useWebSocket(token);
 
   // Forward logs to parent for the AgentLogPanel
   useEffect(() => {
     onLogsUpdate(logs);
   }, [logs, onLogsUpdate]);
+
+  // Forward WebSocket connection state to parent
+  useEffect(() => {
+    onConnectionChange(isConnected);
+  }, [isConnected, onConnectionChange]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -137,7 +144,7 @@ export function ChatPanel({ onLogsUpdate }: ChatPanelProps) {
               }`}
             >
               <div className="prose prose-invert prose-sm max-w-none break-words">
-                <ReactMarkdown>{msg.content}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
               </div>
               {msg.role === "assistant" && !msg.error && msg.citations.length > 0 && (
                 <CitationList citations={msg.citations} />

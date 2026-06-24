@@ -100,7 +100,6 @@ async def list_documents(current_user: dict = Depends(get_current_user)):
 
 @router.get("/{document_id}", response_model=DocumentOut)
 async def get_document(document_id: str, current_user: dict = Depends(get_current_user)):
-    """Poll a single document's status — used by the frontend during ingestion."""
     db = get_db()
     d = await db["documents"].find_one({"_id": document_id, "uploaded_by": current_user["_id"]})
     if not d:
@@ -125,21 +124,25 @@ async def delete_document(document_id: str, current_user: dict = Depends(get_cur
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    # Remove from Qdrant
+    # Remove matching vectors from Qdrant using the correct 1.9.x API
     try:
         from app.db.qdrant import get_qdrant
-        from qdrant_client.models import Filter, FieldCondition, MatchValue
+        from qdrant_client.models import Filter, FieldCondition, MatchValue, FilterSelector
         qdrant = get_qdrant()
         await qdrant.delete(
             collection_name=settings.QDRANT_COLLECTION,
-            points_selector=Filter(
-                must=[FieldCondition(key="document_id", match=MatchValue(value=document_id))]
+            points_selector=FilterSelector(
+                filter=Filter(
+                    must=[FieldCondition(key="document_id", match=MatchValue(value=document_id))]
+                )
             ),
         )
-    except Exception:
-        pass  # Non-fatal — Qdrant entry may not exist if ingestion failed
+    except Exception as exc:
+        # Non-fatal — Qdrant entry may not exist if ingestion failed
+        import logging
+        logging.getLogger(__name__).warning(f"Qdrant delete failed (non-fatal): {exc}")
 
-    # Remove chunks from MongoDB
+    # Remove chunks and document from MongoDB
     await db["chunks"].delete_many({"document_id": document_id})
     await db["documents"].delete_one({"_id": document_id})
 

@@ -234,13 +234,16 @@ async def run_crag(
     }
 
     seen_logs: int = 0
-    # Accumulate full state across streaming steps
+    # Maintain a full accumulated state — merge each node's partial output correctly.
+    # langgraph 0.1.14 astream yields {node_name: partial_state_dict} per step.
+    # We must merge carefully: list fields (agent_logs, etc.) come back as the node's
+    # full replacement for that key (each node does list(state["agent_logs"]) + new items),
+    # so a plain dict.update() is correct here — the node already carries forward old logs.
     accumulated: dict = dict(initial_state)
 
     async for step in graph.astream(initial_state):
-        # Each step is {node_name: partial_state_dict}
-        for node_name, partial in step.items():
-            # Merge partial state into accumulated
+        for _node_name, partial in step.items():
+            # Each node returns the keys it touched; merge into accumulated state
             accumulated.update(partial)
             # Stream any new log lines via callback
             current_logs: List[str] = accumulated.get("agent_logs", [])
