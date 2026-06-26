@@ -6,11 +6,12 @@ services:
       - mongo_data:/data/db
     ports:
       - "27017:27017"
-#    healthcheck:
-#      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
-#      interval: 10s
-#      timeout: 5s
-#      retries: 5
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   qdrant:
     image: qdrant/qdrant:v1.9.4
@@ -24,6 +25,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
 
   backend:
     build: ./backend
@@ -35,8 +37,10 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production-32chars!!}
     depends_on:
-      - mongo
-      - qdrant
+      mongo:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
     ports:
       - "8000:8000"
     volumes:

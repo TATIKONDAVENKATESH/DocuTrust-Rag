@@ -55,6 +55,21 @@ def _get_llm() -> ChatGoogleGenerativeAI:
     )
 
 
+def _ensure_citations(raw: list) -> List[Citation]:
+    """
+    Langgraph astream merges partial node state via dict.update(), which means
+    the citations field may arrive as a list of dicts (serialized) rather than
+    Citation objects after a merge step. This helper normalises either form.
+    """
+    result = []
+    for item in raw:
+        if isinstance(item, Citation):
+            result.append(item)
+        elif isinstance(item, dict):
+            result.append(Citation(**item))
+    return result
+
+
 # ── Nodes ────────────────────────────────────────────────────────────────────
 
 async def retriever_node(state: RAGState) -> dict:
@@ -234,18 +249,11 @@ async def run_crag(
     }
 
     seen_logs: int = 0
-    # Maintain a full accumulated state — merge each node's partial output correctly.
-    # langgraph 0.1.14 astream yields {node_name: partial_state_dict} per step.
-    # We must merge carefully: list fields (agent_logs, etc.) come back as the node's
-    # full replacement for that key (each node does list(state["agent_logs"]) + new items),
-    # so a plain dict.update() is correct here — the node already carries forward old logs.
     accumulated: dict = dict(initial_state)
 
     async for step in graph.astream(initial_state):
         for _node_name, partial in step.items():
-            # Each node returns the keys it touched; merge into accumulated state
             accumulated.update(partial)
-            # Stream any new log lines via callback
             current_logs: List[str] = accumulated.get("agent_logs", [])
             for log_line in current_logs[seen_logs:]:
                 if log_callback:
@@ -255,8 +263,12 @@ async def run_crag(
                         pass
             seen_logs = len(current_logs)
 
+    # Normalise citations — langgraph streaming may have left them as dicts
+    raw_citations = accumulated.get("citations", [])
+    citations = _ensure_citations(raw_citations)
+
     return {
         "answer": accumulated.get("answer", ""),
-        "citations": accumulated.get("citations", []),
+        "citations": citations,
         "agent_logs": accumulated.get("agent_logs", []),
     }

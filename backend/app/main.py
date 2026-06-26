@@ -20,7 +20,21 @@ async def lifespan(app: FastAPI):
     logger.info("Starting DocuTrust API…")
     await connect_db()
     await connect_qdrant()
-    logger.info("All services connected.")
+
+    # Eagerly load ML models so the first upload doesn't hit a cold-start timeout.
+    # Both models are CPU-only and may take 10-30s on first download.
+    import asyncio
+    loop = asyncio.get_running_loop()
+
+    logger.info("Pre-loading embedding model…")
+    from app.services.embedding import load_embedding_model
+    await loop.run_in_executor(None, load_embedding_model)
+
+    logger.info("Pre-loading cross-encoder model…")
+    from app.services.grader import load_cross_encoder
+    await loop.run_in_executor(None, load_cross_encoder)
+
+    logger.info("All services connected and models loaded.")
     yield
     await close_db()
     await close_qdrant()

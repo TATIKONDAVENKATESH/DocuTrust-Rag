@@ -124,7 +124,7 @@ async def delete_document(document_id: str, current_user: dict = Depends(get_cur
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    # Remove matching vectors from Qdrant using the correct 1.9.x API
+    # Remove matching vectors from Qdrant
     try:
         from app.db.qdrant import get_qdrant
         from qdrant_client.models import Filter, FieldCondition, MatchValue, FilterSelector
@@ -138,7 +138,6 @@ async def delete_document(document_id: str, current_user: dict = Depends(get_cur
             ),
         )
     except Exception as exc:
-        # Non-fatal — Qdrant entry may not exist if ingestion failed
         import logging
         logging.getLogger(__name__).warning(f"Qdrant delete failed (non-fatal): {exc}")
 
