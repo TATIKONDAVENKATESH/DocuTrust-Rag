@@ -18,6 +18,7 @@ export interface Document {
   chunk_count: number;
   uploaded_at: string;
   status: "processing" | "ready" | "error";
+  error?: string | null; // populated by backend when status === "error"
 }
 
 export interface Citation {
@@ -52,4 +53,4 @@ export type WsMessageType =
   | { type: "log"; message: string }
   | { type: "result"; answer: string; citations: Citation[]; agent_logs: string[] }
   | { type: "error"; message: string }
-  | { type: "ping"};
+  | { type: "ping" };

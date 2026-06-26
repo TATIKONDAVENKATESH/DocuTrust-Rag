@@ -27,7 +27,7 @@ async def ingest_document(
     1. Extract text with page numbers
     2. Chunk text
     3. Embed chunks
-    4. Store in Qdrant (chunk_id UUID in id field, also in payload for citation lookups)
+    4. Store in Qdrant  (id must be str or int — NOT uuid.UUID object)
     5. Store chunk metadata in MongoDB
     Returns total number of chunks stored.
     """
@@ -59,7 +59,7 @@ async def ingest_document(
         if not all_chunks:
             await db["documents"].update_one(
                 {"_id": document_id},
-                {"$set": {"status": "error", "chunk_count": 0, "error": "No text extracted"}},
+                {"$set": {"status": "error", "chunk_count": 0, "error": "No text could be extracted from the file."}},
             )
             return 0
 
@@ -69,10 +69,11 @@ async def ingest_document(
         embeddings = await loop.run_in_executor(None, embed_texts, texts)
 
         # 4: Upsert to Qdrant
-        # IMPORTANT: qdrant-client 1.9.x requires id to be int or uuid.UUID (not str)
+        # FIX: qdrant-client PointStruct.id must be str or int, NOT uuid.UUID.
+        # Passing uuid.UUID raises pydantic validation error in qdrant-client 1.9.x.
         points = [
             PointStruct(
-                id=uuid.UUID(chunk.chunk_id),   # ← must be uuid.UUID, not raw string
+                id=chunk.chunk_id,          # str — correct for all qdrant-client versions
                 vector=embeddings[i],
                 payload={
                     "chunk_id": chunk.chunk_id,
@@ -108,10 +109,10 @@ async def ingest_document(
         ]
         await db["chunks"].insert_many(chunk_docs, ordered=False)
 
-        # Update document status
+        # Update document status — clear any previous error field
         await db["documents"].update_one(
             {"_id": document_id},
-            {"$set": {"status": "ready", "chunk_count": len(all_chunks)}},
+            {"$set": {"status": "ready", "chunk_count": len(all_chunks)}, "$unset": {"error": ""}},
         )
 
         logger.info(f"Ingested {len(all_chunks)} chunks for document {document_id}")

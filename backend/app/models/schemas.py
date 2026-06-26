@@ -43,6 +43,7 @@ class DocumentMetadata(BaseModel):
     uploaded_by: str
     uploaded_at: datetime = Field(default_factory=datetime.utcnow)
     status: str = "processing"  # processing | ready | error
+    error: Optional[str] = None
 
 
 class DocumentOut(BaseModel):
@@ -53,6 +54,7 @@ class DocumentOut(BaseModel):
     chunk_count: int
     uploaded_at: datetime
     status: str
+    error: Optional[str] = None  # populated when status == "error"
 
 
 # ── Chat ─────────────────────────────────────────────────────────────────────

@@ -12,10 +12,20 @@ import {
 import type { Document } from "../types";
 import { uploadDocument, listDocuments, deleteDocument } from "../services/api";
 
-function StatusIcon({ status }: { status: Document["status"] }) {
+interface StatusIconProps {
+  status: Document["status"];
+  errorMsg?: string | null;
+}
+
+function StatusIcon({ status, errorMsg }: StatusIconProps) {
   if (status === "ready") return <CheckCircle className="w-3.5 h-3.5 text-green-400" />;
   if (status === "processing") return <Clock className="w-3.5 h-3.5 text-yellow-400 animate-pulse" />;
-  return <AlertCircle className="w-3.5 h-3.5 text-red-400" />;
+  // error state — show icon with tooltip containing the actual error message
+  return (
+    <span title={errorMsg || "Ingestion failed"} className="cursor-help">
+      <AlertCircle className="w-3.5 h-3.5 text-red-400" />
+    </span>
+  );
 }
 
 function formatBytes(bytes: number) {
@@ -130,12 +140,19 @@ export function DocumentPanel() {
             <div className="flex-1 min-w-0">
               <p className="text-xs font-medium text-slate-200 truncate">{doc.filename}</p>
               <div className="flex items-center gap-1.5 mt-1">
-                <StatusIcon status={doc.status} />
+                <StatusIcon status={doc.status} errorMsg={doc.error} />
                 <span className="text-xs text-slate-500">
                   {formatBytes(doc.size_bytes)}
                   {doc.chunk_count > 0 && ` · ${doc.chunk_count} chunks`}
+                  {doc.status === "processing" && " · indexing…"}
                 </span>
               </div>
+              {/* Show error message inline beneath the filename when ingestion fails */}
+              {doc.status === "error" && doc.error && (
+                <p className="text-xs text-red-400 mt-1 break-words leading-relaxed">
+                  {doc.error}
+                </p>
+              )}
             </div>
             <button
               onClick={() => handleDelete(doc.id)}

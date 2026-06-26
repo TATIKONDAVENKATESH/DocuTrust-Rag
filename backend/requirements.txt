@@ -33,3 +33,6 @@ bcrypt==4.0.1
 httpx==0.27.0
 
 numpy==1.26.4
+
+# Web search fallback for CRAG pipeline
+duckduckgo-search==6.2.4

@@ -20,6 +20,20 @@ def _get_extension(filename: str) -> str:
     return filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
 
+def _doc_to_out(d: dict) -> DocumentOut:
+    """Convert a MongoDB document dict to DocumentOut, including the error field."""
+    return DocumentOut(
+        id=d["_id"],
+        filename=d["filename"],
+        file_type=d["file_type"],
+        size_bytes=d["size_bytes"],
+        chunk_count=d.get("chunk_count", 0),
+        uploaded_at=d["uploaded_at"],
+        status=d.get("status", "processing"),
+        error=d.get("error"),  # None when not set or status != "error"
+    )
+
+
 @router.post("/upload", response_model=DocumentOut, status_code=201)
 async def upload_document(
     background_tasks: BackgroundTasks,
@@ -76,6 +90,7 @@ async def upload_document(
         chunk_count=0,
         uploaded_at=now,
         status="processing",
+        error=None,
     )
 
 
@@ -84,18 +99,7 @@ async def list_documents(current_user: dict = Depends(get_current_user)):
     db = get_db()
     cursor = db["documents"].find({"uploaded_by": current_user["_id"]}).sort("uploaded_at", -1)
     docs = await cursor.to_list(length=200)
-    return [
-        DocumentOut(
-            id=d["_id"],
-            filename=d["filename"],
-            file_type=d["file_type"],
-            size_bytes=d["size_bytes"],
-            chunk_count=d.get("chunk_count", 0),
-            uploaded_at=d["uploaded_at"],
-            status=d.get("status", "processing"),
-        )
-        for d in docs
-    ]
+    return [_doc_to_out(d) for d in docs]
 
 
 @router.get("/{document_id}", response_model=DocumentOut)
@@ -104,15 +108,7 @@ async def get_document(document_id: str, current_user: dict = Depends(get_curren
     d = await db["documents"].find_one({"_id": document_id, "uploaded_by": current_user["_id"]})
     if not d:
         raise HTTPException(status_code=404, detail="Document not found")
-    return DocumentOut(
-        id=d["_id"],
-        filename=d["filename"],
-        file_type=d["file_type"],
-        size_bytes=d["size_bytes"],
-        chunk_count=d.get("chunk_count", 0),
-        uploaded_at=d["uploaded_at"],
-        status=d.get("status", "processing"),
-    )
+    return _doc_to_out(d)
 
 
 @router.delete("/{document_id}", status_code=204)

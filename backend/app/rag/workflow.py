@@ -30,6 +30,7 @@ class RAGState(TypedDict):
     citations: List[Citation]
     agent_logs: List[str]
     iteration: int
+    used_web_fallback: bool
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -132,6 +133,56 @@ async def query_rewriter_node(state: RAGState) -> dict:
     }
 
 
+async def web_fallback_node(state: RAGState) -> dict:
+    """
+    DuckDuckGo web search fallback.
+    Triggered when document retrieval + rewriting still yields no relevant chunks.
+    Fetches real web results and converts them to pseudo-chunks for the generator.
+    Citation filename is set to 'Web: <url>' so the UI can distinguish web sources.
+    """
+    query = state.get("rewritten_query") or state["query"]
+    logs = list(state["agent_logs"])
+    logs.append("No relevant document chunks found. Falling back to web search...")
+
+    web_chunks: List[dict] = []
+    try:
+        from duckduckgo_search import DDGS
+
+        loop = asyncio.get_running_loop()
+
+        def _ddg_search() -> list:
+            with DDGS() as ddgs:
+                return list(ddgs.text(query, max_results=5))
+
+        results = await loop.run_in_executor(None, _ddg_search)
+
+        for i, r in enumerate(results):
+            snippet = r.get("body", "").strip()
+            url = r.get("href", "")
+            title = r.get("title", f"Web result {i + 1}")
+            if not snippet:
+                continue
+            web_chunks.append({
+                "chunk_id": f"web-{i}",
+                "document_id": "web",
+                "filename": f"Web: {url}",
+                "text": f"{title}\n{snippet}",
+                "page_number": None,
+                "chunk_index": i,
+            })
+
+        logs.append(f"Web search returned {len(web_chunks)} results.")
+    except Exception as exc:
+        logger.warning(f"Web fallback search failed: {exc}")
+        logs.append(f"Web search failed: {exc}")
+
+    return {
+        "relevant_chunks": web_chunks,
+        "agent_logs": logs,
+        "used_web_fallback": True,
+    }
+
+
 async def answer_generator_node(state: RAGState) -> dict:
     query = state.get("rewritten_query") or state["query"]
     relevant = state["relevant_chunks"]
@@ -141,7 +192,7 @@ async def answer_generator_node(state: RAGState) -> dict:
     if not relevant:
         answer = (
             "I could not find sufficiently relevant information in the uploaded documents "
-            "to answer your question. Please upload documents that cover this topic."
+            "or via web search to answer your question."
         )
         logs.append("Answer generated (no relevant chunks found).")
         return {"answer": answer, "citations": [], "agent_logs": logs}
@@ -155,11 +206,19 @@ async def answer_generator_node(state: RAGState) -> dict:
         )
     context = "\n\n".join(context_parts)
 
+    used_web = state.get("used_web_fallback", False)
+    source_note = (
+        "These excerpts are from web search results because no sufficiently relevant "
+        "document chunks were found. "
+        if used_web
+        else ""
+    )
+
     prompt = (
         "You are a precise enterprise document assistant. Answer the question using ONLY "
-        "the provided document excerpts. Do not speculate beyond what the documents say.\n\n"
+        f"the provided excerpts. {source_note}Do not speculate beyond what the sources say.\n\n"
         f"Question: {query}\n\n"
-        f"Document Excerpts:\n{context}\n\n"
+        f"Excerpts:\n{context}\n\n"
         "Provide a thorough answer based strictly on the excerpts above. "
         "Reference sources by their [Source N] labels where appropriate."
     )
@@ -187,11 +246,20 @@ async def answer_generator_node(state: RAGState) -> dict:
 
 # ── Routing ──────────────────────────────────────────────────────────────────
 
-def should_rewrite(state: RAGState) -> str:
+def should_rewrite_or_fallback(state: RAGState) -> str:
+    """
+    After grading:
+    - If relevant chunks exist → generate answer directly.
+    - If no relevant chunks and iterations remain → rewrite query and retry.
+    - If no relevant chunks and iterations exhausted → trigger web fallback.
+    """
     relevant = state.get("relevant_chunks", [])
     iteration = state.get("iteration", 0)
-    if relevant or iteration >= MAX_REWRITE_ITERATIONS:
+
+    if relevant:
         return "generate"
+    if iteration >= MAX_REWRITE_ITERATIONS:
+        return "web_fallback"
     return "rewrite"
 
 
@@ -202,15 +270,22 @@ def build_crag_graph():
     builder.add_node("retriever", retriever_node)
     builder.add_node("grader", grader_node)
     builder.add_node("rewriter", query_rewriter_node)
+    builder.add_node("web_fallback", web_fallback_node)
     builder.add_node("generator", answer_generator_node)
+
     builder.set_entry_point("retriever")
     builder.add_edge("retriever", "grader")
     builder.add_conditional_edges(
         "grader",
-        should_rewrite,
-        {"generate": "generator", "rewrite": "rewriter"},
+        should_rewrite_or_fallback,
+        {
+            "generate": "generator",
+            "rewrite": "rewriter",
+            "web_fallback": "web_fallback",
+        },
     )
     builder.add_edge("rewriter", "retriever")
+    builder.add_edge("web_fallback", "generator")
     builder.add_edge("generator", END)
     return builder.compile()
 
@@ -246,6 +321,7 @@ async def run_crag(
         "citations": [],
         "agent_logs": [],
         "iteration": 0,
+        "used_web_fallback": False,
     }
 
     seen_logs: int = 0
