@@ -13,12 +13,11 @@ from app.db.qdrant import get_qdrant
 from app.models.schemas import Citation
 from app.services.embedding import embed_query
 from app.services.grader import grade_chunks_async
-from duckduckgo_search import DDGS
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
+from tavily import AsyncTavilyClient
 
 logger = logging.getLogger(__name__)
 
-_DDG_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ddg")
 _EMBED_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="embed")
 
 # ── Cached LLM client ──────────────────────────────────────────────────────
@@ -200,17 +199,15 @@ async def web_fallback_node(state: RAGState) -> dict:
 
     web_chunks: List[dict] = []
     try:
-        loop = asyncio.get_running_loop()
+        if not settings.TAVILY_API_KEY:
+            raise RuntimeError("TAVILY_API_KEY is not set in .env")
 
-        def _ddg_search() -> list:
-            with DDGS(timeout=settings.DDG_TIMEOUT) as ddgs:
-                return list(ddgs.text(query, max_results=5))
+        client = AsyncTavilyClient(api_key=settings.TAVILY_API_KEY)
+        response = await client.search(query, max_results=5)
 
-        results = await loop.run_in_executor(_DDG_EXECUTOR, _ddg_search)
-
-        for i, r in enumerate(results):
-            snippet = r.get("body", "").strip()
-            url = r.get("href", "")
+        for i, r in enumerate(response.get("results", [])):
+            snippet = r.get("content", "").strip()
+            url = r.get("url", "")
             title = r.get("title", f"Web result {i + 1}")
             if not snippet:
                 continue
@@ -225,18 +222,15 @@ async def web_fallback_node(state: RAGState) -> dict:
             })
 
         logs.append(f"Web search returned {len(web_chunks)} results.")
+
     except Exception as exc:
         logger.warning(f"Web fallback search failed: {exc}")
         logs.append(f"Web search failed: {exc}")
 
-    # ── Re-grade web results ──────────────────────────────────────────────
-    logs.append("Re-grading web search results...")
-    _, relevant, relevant_scores = await _grade_and_filter(query, web_chunks, logs)
-
     return {
         "retrieved_chunks": web_chunks,
-        "relevant_chunks": relevant,
-        "relevant_scores": relevant_scores,
+        "relevant_chunks": web_chunks,
+        "relevant_scores": [0.5] * len(web_chunks),
         "agent_logs": logs,
         "used_web_fallback": True,
     }

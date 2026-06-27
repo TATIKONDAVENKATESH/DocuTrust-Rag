@@ -52,6 +52,7 @@ class Settings(BaseSettings):
 
     # ── Web fallback ─────────────────────────────────────────────────────────
     DDG_TIMEOUT: int = 8
+    TAVILY_API_KEY: str = ""
 
     class Config:
         env_file = ".env"
