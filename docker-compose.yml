@@ -21,8 +21,7 @@ services:
     ports:
       - "6333:6333"
     healthcheck:
-      # Use curl which is available in the qdrant image
-      test: ["CMD", "curl", "-sf", "http://localhost:6333/readyz"]
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333'"]
       interval: 10s
       timeout: 5s
       retries: 5
