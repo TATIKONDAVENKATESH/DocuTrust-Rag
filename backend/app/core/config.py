@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     # ── Gemini ───────────────────────────────────────────────────────────────
     GEMINI_API_KEY: str
 
+    GEMINI_MODEL: str = "gemini-2.5-flash"
+
     # ── JWT ──────────────────────────────────────────────────────────────────
     SECRET_KEY: str = "change-me-in-production-32chars!!"
     ALGORITHM: str = "HS256"
@@ -31,9 +33,6 @@ class Settings(BaseSettings):
     # ── Cross-encoder grader model ───────────────────────────────────────────
     CROSS_ENCODER_MODEL: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
-    # ── Chunking ─────────────────────────────────────────────────────────────
-    # CHUNK_SIZE is measured in WORDS (the splitter uses text.split()).
-    # 300 words ≈ 400-500 tokens for English prose — a safe fit for MiniLM.
     CHUNK_SIZE: int = 300
     CHUNK_OVERLAP: int = 50         # words of overlap between adjacent chunks
     MIN_CHUNK_WORDS: int = 20       # discard chunks shorter than this
@@ -41,14 +40,6 @@ class Settings(BaseSettings):
     # ── Retrieval ────────────────────────────────────────────────────────────
     TOP_K_RETRIEVAL: int = 5
 
-    # ── Grading threshold ────────────────────────────────────────────────────
-    # ms-marco-MiniLM-L-6-v2 raw logits run roughly –10 … +10.
-    # After sigmoid:  logit 0  → sigmoid 0.50
-    #                 logit 2  → sigmoid 0.88
-    # A threshold of 0.35 means sigmoid(logit) ≥ 0.35  →  logit ≥ -0.62
-    # which is VERY permissive — almost every chunk passes.
-    # Using 0.20 catches genuinely off-topic chunks while allowing
-    # marginally relevant ones through for the LLM to handle.
     RELEVANCE_THRESHOLD: float = 0.20
 
     # ── CRAG control ─────────────────────────────────────────────────────────

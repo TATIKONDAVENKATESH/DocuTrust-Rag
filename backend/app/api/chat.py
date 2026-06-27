@@ -49,6 +49,8 @@ async def query(payload: QueryRequest, current_user: dict = Depends(get_current_
     answer = result["answer"]
     citations: list[Citation] = result["citations"]
     logs: list[str] = result["agent_logs"]
+    confidence: float = result.get("confidence", 0.0)
+    used_web_fallback: bool = result.get("used_web_fallback", False)
 
     # ── Format answer with source block ──────────────────────────────────────
     if citations:
@@ -86,6 +88,8 @@ async def query(payload: QueryRequest, current_user: dict = Depends(get_current_
         answer=formatted_answer,
         citations=citations,
         agent_trace=logs,
+        confidence=confidence,
+        used_web_fallback=used_web_fallback,
     )
 
 

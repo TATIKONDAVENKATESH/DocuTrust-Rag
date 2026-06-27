@@ -1,15 +1,20 @@
 import { useRef, useCallback, useState } from "react";
-import type { Citation, WsMessageType } from "../types";
+import type { Citation, RetrievedChunkPreview, WsMessageType } from "../types";
+
+type OnResultFn = (
+  answer: string,
+  citations: Citation[],
+  logs: string[],
+  confidence: number,
+  usedWebFallback: boolean,
+  retrievedChunks: RetrievedChunkPreview[]
+) => void;
 
 interface WsHookReturn {
   logs: string[];
   isConnected: boolean;
   isBusy: boolean;
-  sendQuery: (
-    query: string,
-    onResult: (answer: string, citations: Citation[], logs: string[]) => void,
-    onError: (msg: string) => void
-  ) => void;
+  sendQuery: (query: string, onResult: OnResultFn, onError: (msg: string) => void) => void;
   clearLogs: () => void;
 }
 
@@ -20,16 +25,12 @@ export function useWebSocket(token: string | null): WsHookReturn {
   const [isBusy, setIsBusy] = useState(false);
 
   // Stable refs for callbacks so we don't close over stale values
-  const onResultRef = useRef<((answer: string, citations: Citation[], logs: string[]) => void) | null>(null);
+  const onResultRef = useRef<OnResultFn | null>(null);
   const onErrorRef = useRef<((msg: string) => void) | null>(null);
   const collectedLogsRef = useRef<string[]>([]);
 
   const sendQuery = useCallback(
-    (
-      query: string,
-      onResult: (answer: string, citations: Citation[], logs: string[]) => void,
-      onError: (msg: string) => void
-    ) => {
+    (query: string, onResult: OnResultFn, onError: (msg: string) => void) => {
       if (!token) {
         onError("Not authenticated.");
         return;
@@ -82,7 +83,14 @@ export function useWebSocket(token: string | null): WsHookReturn {
           setLogs([...collectedLogsRef.current]);
         } else if (msg.type === "result") {
           setIsBusy(false);
-          onResultRef.current?.(msg.answer, msg.citations, msg.agent_logs);
+          onResultRef.current?.(
+            msg.answer,
+            msg.citations,
+            msg.agent_logs,
+            msg.confidence,
+            msg.used_web_fallback,
+            msg.retrieved_chunks
+          );
         } else if (msg.type === "error") {
           setIsBusy(false);
           onErrorRef.current?.(msg.message);

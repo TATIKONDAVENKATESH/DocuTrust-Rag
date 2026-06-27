@@ -56,6 +56,8 @@ class Citation(BaseModel):
     filename: str
     page_number: Optional[int]
     chunk_id: str
+    relevance_score: Optional[float] = None   # cross-encoder sigmoid score (0-1)
+    text_preview: Optional[str] = None         # short snippet of the cited chunk
 
 class ChatMessage(BaseModel):
     role: str  # user | assistant
@@ -79,6 +81,8 @@ class QueryResponse(BaseModel):
     answer: str
     citations: List[Citation]
     agent_trace: List[str]
+    confidence: float = 0.0          # avg relevance score of chunks used in the final answer
+    used_web_fallback: bool = False
 
 # ── Chunk ────────────────────────────────────────────────────────────────────
 

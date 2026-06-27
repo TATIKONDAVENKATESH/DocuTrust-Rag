@@ -25,6 +25,14 @@ export interface Citation {
   filename: string;
   page_number: number | null;
   chunk_id: string;
+  relevance_score?: number | null;
+  text_preview?: string | null;
+}
+
+export interface RetrievedChunkPreview {
+  filename: string;
+  page_number: number | null;
+  text_preview: string;
 }
 
 export interface ChatMessage {
@@ -46,11 +54,21 @@ export interface QueryResponse {
   answer: string;
   citations: Citation[];
   agent_trace: string[];
+  confidence: number;
+  used_web_fallback: boolean;
 }
 
 export type WsMessageType =
   | { type: "start"; query: string }
   | { type: "log"; message: string }
-  | { type: "result"; answer: string; citations: Citation[]; agent_logs: string[] }
+  | {
+      type: "result";
+      answer: string;
+      citations: Citation[];
+      agent_logs: string[];
+      confidence: number;
+      used_web_fallback: boolean;
+      retrieved_chunks: RetrievedChunkPreview[];
+    }
   | { type: "error"; message: string }
   | { type: "ping" };

@@ -3,7 +3,7 @@ import { MessageSquare, Send, User, Bot, Loader2, AlertCircle } from "lucide-rea
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CitationList } from "./CitationList";
-import type { Citation } from "../types";
+import type { Citation, RetrievedChunkPreview } from "../types";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { useAuth } from "../hooks/useAuth";
 
@@ -12,6 +12,9 @@ interface Message {
   role: "user" | "assistant";
   content: string;
   citations: Citation[];
+  confidence?: number;
+  usedWebFallback?: boolean;
+  retrievedChunks?: RetrievedChunkPreview[];
   error?: boolean;
 }
 
@@ -62,12 +65,15 @@ export function ChatPanel({ onLogsUpdate, onConnectionChange }: ChatPanelProps) 
       sendQuery(
         q,
         // onResult
-        (answer, citations) => {
+        (answer, citations, _logs, confidence, usedWebFallback, retrievedChunks) => {
           const assistantMsg: Message = {
             id: `a-${Date.now()}`,
             role: "assistant",
             content: answer,
             citations,
+            confidence,
+            usedWebFallback,
+            retrievedChunks,
           };
           setMessages((prev) => [...prev, assistantMsg]);
         },
@@ -147,7 +153,12 @@ export function ChatPanel({ onLogsUpdate, onConnectionChange }: ChatPanelProps) 
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
               </div>
               {msg.role === "assistant" && !msg.error && msg.citations.length > 0 && (
-                <CitationList citations={msg.citations} />
+                <CitationList
+                  citations={msg.citations}
+                  confidence={msg.confidence}
+                  usedWebFallback={msg.usedWebFallback}
+                  retrievedChunks={msg.retrievedChunks}
+                />
               )}
             </div>
           </div>

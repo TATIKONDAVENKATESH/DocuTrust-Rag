@@ -20,9 +20,26 @@ logger = logging.getLogger(__name__)
 _DDG_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ddg")
 _EMBED_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="embed")
 
+# ── Cached LLM client ──────────────────────────────────────────────────────
+# Previously _get_llm() built a brand-new ChatGoogleGenerativeAI (and
+# re-imported google.generativeai.types) on *every* call to the rewriter
+# and generator nodes. That's wasted setup cost per query. Build it once
+# and reuse it; only fail at call time (not at module import time) if the
+# key is missing, so a missing GEMINI_API_KEY never takes down auth/upload.
+_llm: Optional[ChatGoogleGenerativeAI] = None
+
 
 def _get_llm() -> ChatGoogleGenerativeAI:
-    # Safety settings import moved inside to avoid import-time side effects
+    global _llm
+    if _llm is not None:
+        return _llm
+
+    if not settings.GEMINI_API_KEY:
+        raise RuntimeError(
+            "GEMINI_API_KEY is not configured. Set it in your .env file to "
+            "enable query rewriting and answer generation."
+        )
+
     from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
     safety_settings = {
@@ -32,13 +49,14 @@ def _get_llm() -> ChatGoogleGenerativeAI:
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
     }
 
-    return ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
+    _llm = ChatGoogleGenerativeAI(
+        model=settings.GEMINI_MODEL,
         google_api_key=settings.GEMINI_API_KEY,
         temperature=0.2,
         safety_settings=safety_settings,
         convert_system_message_to_human=True,
     )
+    return _llm
 
 
 class RAGState(TypedDict):
@@ -47,6 +65,7 @@ class RAGState(TypedDict):
     retrieved_chunks: List[dict]
     scores: List[float]
     relevant_chunks: List[dict]
+    relevant_scores: List[float]    # scores aligned 1:1 with relevant_chunks
     rewritten_query: Optional[str]
     answer: str
     citations: List[Citation]
@@ -111,6 +130,32 @@ async def _invoke_llm_safe(llm: ChatGoogleGenerativeAI, prompt: str) -> str:
         raise RuntimeError(f"Gemini API call failed: {exc}") from exc
 
 
+async def _grade_and_filter(
+    query: str, chunks: List[dict], logs: List[str]
+) -> tuple[List[float], List[dict], List[float]]:
+    """
+    Shared grading helper used by both the initial retrieval grading pass
+    and the post-web-fallback re-grading pass, so both paths apply the
+    exact same relevance threshold logic.
+    """
+    if not chunks:
+        logs.append("No chunks to grade.")
+        return [], [], []
+
+    texts = [c["text"] for c in chunks]
+    scores: List[float] = await grade_chunks_async(query, texts)
+
+    avg_score = sum(scores) / len(scores) if scores else 0.0
+    logs.append(f"Relevance score: {avg_score:.2f}")
+
+    paired = [(c, s) for c, s in zip(chunks, scores) if s >= settings.RELEVANCE_THRESHOLD]
+    relevant = [c for c, _ in paired]
+    relevant_scores = [s for _, s in paired]
+    logs.append(f"Relevant chunks after grading: {len(relevant)}")
+
+    return scores, relevant, relevant_scores
+
+
 # ── Graph nodes ───────────────────────────────────────────────────────────────
 
 async def retriever_node(state: RAGState) -> dict:
@@ -130,20 +175,14 @@ async def grader_node(state: RAGState) -> dict:
     logs = list(state["agent_logs"])
     logs.append("Running relevance grading...")
 
-    if not chunks:
-        logs.append("No chunks to grade.")
-        return {"scores": [], "relevant_chunks": [], "agent_logs": logs}
+    scores, relevant, relevant_scores = await _grade_and_filter(query, chunks, logs)
 
-    texts = [c["text"] for c in chunks]
-    scores: List[float] = await grade_chunks_async(query, texts)
-
-    avg_score = sum(scores) / len(scores) if scores else 0.0
-    logs.append(f"Relevance score: {avg_score:.2f}")
-
-    relevant = [c for c, s in zip(chunks, scores) if s >= settings.RELEVANCE_THRESHOLD]
-    logs.append(f"Relevant chunks after grading: {len(relevant)}")
-
-    return {"scores": scores, "relevant_chunks": relevant, "agent_logs": logs}
+    return {
+        "scores": scores,
+        "relevant_chunks": relevant,
+        "relevant_scores": relevant_scores,
+        "agent_logs": logs,
+    }
 
 
 async def query_rewriter_node(state: RAGState) -> dict:
@@ -151,7 +190,6 @@ async def query_rewriter_node(state: RAGState) -> dict:
     logs = list(state["agent_logs"])
     logs.append("Rewriting query for better retrieval...")
 
-    llm = _get_llm()
     prompt = (
         f"The following search query did not produce sufficiently relevant document chunks.\n"
         f"Original query: {original_query}\n\n"
@@ -159,6 +197,7 @@ async def query_rewriter_node(state: RAGState) -> dict:
         f"Return ONLY the rewritten query text, nothing else."
     )
     try:
+        llm = _get_llm()
         rewritten = await _invoke_llm_safe(llm, prompt)
     except Exception as exc:
         logger.warning(f"Query rewrite failed: {exc}. Using original query.")
@@ -208,8 +247,20 @@ async def web_fallback_node(state: RAGState) -> dict:
         logger.warning(f"Web fallback search failed: {exc}")
         logs.append(f"Web search failed: {exc}")
 
+    # ── Re-grade web results ──────────────────────────────────────────────
+    # The CRAG spec requires: web fallback → retrieve → RE-GRADE → generate.
+    # Previously this node piped raw, ungraded web snippets straight to the
+    # generator, which defeats the point of corrective grading — an
+    # off-topic or low-quality web result would go straight into the answer
+    # with no validation. Grade them through the same cross-encoder
+    # threshold as document chunks before they're allowed to be "relevant".
+    logs.append("Re-grading web search results...")
+    _, relevant, relevant_scores = await _grade_and_filter(query, web_chunks, logs)
+
     return {
-        "relevant_chunks": web_chunks,
+        "retrieved_chunks": web_chunks,
+        "relevant_chunks": relevant,
+        "relevant_scores": relevant_scores,
         "agent_logs": logs,
         "used_web_fallback": True,
     }
@@ -218,6 +269,7 @@ async def web_fallback_node(state: RAGState) -> dict:
 async def answer_generator_node(state: RAGState) -> dict:
     query = state.get("rewritten_query") or state["query"]
     relevant = state["relevant_chunks"]
+    relevant_scores = state.get("relevant_scores", [])
     logs = list(state["agent_logs"])
     logs.append("Generating answer...")
 
@@ -254,8 +306,8 @@ async def answer_generator_node(state: RAGState) -> dict:
         "Reference sources by their [Source N] labels where appropriate."
     )
 
-    llm = _get_llm()
     try:
+        llm = _get_llm()
         answer_text = await _invoke_llm_safe(llm, prompt)
         logs.append("Answer generated.")
     except Exception as exc:
@@ -271,6 +323,8 @@ async def answer_generator_node(state: RAGState) -> dict:
             filename=chunk["filename"],
             page_number=chunk.get("page_number"),
             chunk_id=str(chunk.get("chunk_id", chunk.get("chunk_index", i))),
+            relevance_score=(relevant_scores[i] if i < len(relevant_scores) else None),
+            text_preview=(chunk["text"][:240] + ("…" if len(chunk["text"]) > 240 else "")),
         )
         for i, chunk in enumerate(relevant)
     ]
@@ -344,7 +398,9 @@ async def run_crag(
         log_callback: Optional async callable that receives each log line in real-time.
 
     Returns:
-        Dict with keys: answer, citations, agent_logs.
+        Dict with keys: answer, citations, agent_logs, confidence,
+        used_web_fallback, retrieved_chunks (previews of every chunk the
+        grader actually scored, for UI display).
     """
     graph = get_crag_graph()
     initial_state: RAGState = {
@@ -353,6 +409,7 @@ async def run_crag(
         "retrieved_chunks": [],
         "scores": [],
         "relevant_chunks": [],
+        "relevant_scores": [],
         "rewritten_query": None,
         "answer": "",
         "citations": [],
@@ -379,8 +436,23 @@ async def run_crag(
     raw_citations = accumulated.get("citations", [])
     citations = _ensure_citations(raw_citations)
 
+    relevant_scores = accumulated.get("relevant_scores", [])
+    confidence = (sum(relevant_scores) / len(relevant_scores)) if relevant_scores else 0.0
+
+    retrieved_preview = [
+        {
+            "filename": c.get("filename"),
+            "page_number": c.get("page_number"),
+            "text_preview": c.get("text", "")[:240],
+        }
+        for c in accumulated.get("retrieved_chunks", [])
+    ]
+
     return {
         "answer": accumulated.get("answer", ""),
         "citations": citations,
         "agent_logs": accumulated.get("agent_logs", []),
+        "confidence": round(confidence, 4),
+        "used_web_fallback": accumulated.get("used_web_fallback", False),
+        "retrieved_chunks": retrieved_preview,
     }

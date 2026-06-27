@@ -64,6 +64,9 @@ async def websocket_chat(websocket: WebSocket, token: str = Query(...)):
                     "answer": result["answer"],
                     "citations": [c.model_dump() for c in result["citations"]],
                     "agent_logs": result["agent_logs"],
+                    "confidence": result.get("confidence", 0.0),
+                    "used_web_fallback": result.get("used_web_fallback", False),
+                    "retrieved_chunks": result.get("retrieved_chunks", []),
                 })
             )
 
