@@ -1,66 +1,95 @@
 # DocuTrust — Enterprise Advanced RAG Platform
 
-Self-correcting Retrieval-Augmented Generation platform for enterprise document intelligence. Built with LangGraph CRAG, FastAPI, React, MongoDB, and Qdrant.
+Self-correcting Retrieval-Augmented Generation platform for enterprise document intelligence. Built with LangGraph (CRAG pattern), FastAPI, React/TypeScript, MongoDB, and Qdrant.
 
 ---
 
-## Architecture
+## Architecture Overview
 
 ```
-Frontend (React + TypeScript + TailwindCSS)
+Frontend (React 18 + TypeScript + TailwindCSS)   ← Vite, served via nginx on :3000
 │
-├── Left Panel   — PDF/TXT/DOCX upload + document list
-├── Middle Panel — Real-time agent execution log (WebSocket)
-└── Right Panel  — Chat interface + validated answers + citations
+├── Left Panel    — PDF / TXT / DOCX upload + document list (drag-and-drop)
+├── Middle Panel  — Real-time CRAG agent execution log (WebSocket streaming)
+└── Right Panel   — Chat interface, validated answers, citations with previews
 
-Backend (FastAPI + Python 3.11)
+Backend (FastAPI + Python 3.11, async)            ← uvicorn on :8000
 │
-├── /api/auth     — Register, login, JWT
-├── /api/documents— Upload, list, delete (async ingestion pipeline)
-├── /api/chat     — Query endpoint, session management
-└── /ws/chat      — WebSocket for real-time CRAG agent logs
+├── /api/auth        — Register, login, JWT (24 h tokens)
+├── /api/documents   — Upload, list, delete; async background ingestion pipeline
+├── /api/chat        — REST query endpoint + session management
+└── /ws/chat         — WebSocket for real-time CRAG agent log streaming
 
-CRAG Workflow (LangGraph)
+CRAG Workflow (LangGraph StateGraph)
 │
-├── Retriever Node      — Embed query → search Qdrant top-8
-├── Grader Node         — Cross-encoder scores each chunk
-├── Decision            — Relevant? → Generate. Not relevant? → Rewrite
-├── Query Rewriter Node — Gemini rewrites query for better retrieval
-└── Answer Generator    — Gemini generates cited answer from chunks
+├── Retriever Node        — Embed query → Qdrant ANN search, top-K chunks (per-user filter)
+├── Grader Node           — Cross-encoder scores each chunk against the query
+├── Decision Router       — Relevant chunks → Generate | Exhausted rewrites → Web fallback | else → Rewrite
+├── Query Rewriter Node   — Gemini rewrites query for better retrieval (max 1 iteration by default)
+├── Web Fallback Node     — Tavily search when retrieval fully fails
+└── Answer Generator Node — Gemini generates cited answer from graded chunks
 
-Databases
-├── MongoDB  — Users, chat sessions, messages, interaction traces, chunk metadata
-└── Qdrant   — Dense vector index (sentence-transformers/all-MiniLM-L6-v2, dim=384)
+Storage
+├── MongoDB   — Users, documents, chunks metadata, chat sessions & messages
+└── Qdrant    — Dense vector index (all-MiniLM-L6-v2, dim=384, per-user payload filter)
 ```
+
+---
+
+## Technology Stack
+
+| Layer | Technology |
+|---|---|
+| LLM | Google Gemini 2.5 Flash (`gemini-2.5-flash`) |
+| RAG Framework | LangGraph 0.2 — Corrective RAG (CRAG) pattern |
+| Embeddings | `sentence-transformers/all-MiniLM-L6-v2` (384-dim) |
+| Reranker / Grader | `cross-encoder/ms-marco-MiniLM-L-6-v2` |
+| Web Fallback Search | Tavily (`tavily-python`) |
+| Vector DB | Qdrant v1.9.4 |
+| Document DB | MongoDB 7 (Motor async driver) |
+| Backend | FastAPI 0.111 + Uvicorn (Python 3.11, fully async) |
+| PDF / DOCX Parsing | PyMuPDF 1.24 (3-strategy extraction) + python-docx |
+| Auth | JWT via `python-jose`, passwords via `passlib[bcrypt]` |
+| Frontend | React 18, TypeScript 5, TailwindCSS 3, Vite 8 |
+| Frontend extras | Axios, react-dropzone, react-markdown, lucide-react |
+| Containers | Docker Compose (mongo, qdrant, backend, frontend services) |
 
 ---
 
 ## Environment Variables
 
-| Variable | Required | Description |
-|---|---|---|
-| `GEMINI_API_KEY` | ✅ | Google Gemini API key (get from https://aistudio.google.com/app/apikey) |
-| `SECRET_KEY` | ✅ | 32+ char random string for JWT signing |
-| `MONGODB_URL` | optional | Defaults to `mongodb://mongo:27017` |
-| `QDRANT_HOST` | optional | Defaults to `qdrant` |
-| `QDRANT_PORT` | optional | Defaults to `6333` |
-| `CHUNK_SIZE` | optional | Words per chunk, default `512` |
-| `CHUNK_OVERLAP` | optional | Overlapping words, default `64` |
-| `TOP_K_RETRIEVAL` | optional | Chunks retrieved per query, default `8` |
-| `RELEVANCE_THRESHOLD` | optional | Cross-encoder score cutoff, default `0.5` |
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `GEMINI_API_KEY` | ✅ | — | Google Gemini API key — get from https://aistudio.google.com/app/apikey |
+| `TAVILY_API_KEY` | ⚠️ optional | `""` | Tavily search API key — required only if you want web fallback to work |
+| `SECRET_KEY` | ✅ | `change-me-in-production-32chars!!` | 32+ char random string for JWT signing |
+| `GEMINI_MODEL` | optional | `gemini-2.5-flash` | Override the Gemini model name |
+| `MONGODB_URL` | optional | `mongodb://mongo:27017` | MongoDB connection string |
+| `MONGODB_DB` | optional | `docutrust` | Database name |
+| `QDRANT_HOST` | optional | `qdrant` | Qdrant service hostname |
+| `QDRANT_PORT` | optional | `6333` | Qdrant port |
+| `QDRANT_COLLECTION` | optional | `documents` | Qdrant collection name |
+| `CHUNK_SIZE` | optional | `300` | Words per chunk |
+| `CHUNK_OVERLAP` | optional | `50` | Overlapping words between adjacent chunks |
+| `MIN_CHUNK_WORDS` | optional | `20` | Discard chunks shorter than this |
+| `TOP_K_RETRIEVAL` | optional | `5` | Chunks retrieved per query |
+| `RELEVANCE_THRESHOLD` | optional | `0.20` | Cross-encoder score cutoff for relevant chunks |
+| `MAX_REWRITE_ITERATIONS` | optional | `1` | How many query rewrites before triggering web fallback |
+| `DDG_TIMEOUT` | optional | `8` | Web search timeout in seconds |
+| `CORS_ORIGINS` | optional | `*` | Comma-separated allowed CORS origins |
 
 ---
 
 ## Quick Start (Docker Compose)
 
 ```bash
-# 1. Clone and enter the repo
+# 1. Clone the repo
 git clone <repo-url>
 cd docutrust
 
 # 2. Create environment file
 cp .env.example .env
-# Edit .env — set your GEMINI_API_KEY
+# Edit .env — set GEMINI_API_KEY (and optionally TAVILY_API_KEY)
 
 # 3. Build and start all services
 docker compose up --build
@@ -69,7 +98,13 @@ docker compose up --build
 open http://localhost:3000
 ```
 
-The first build downloads the ML models (~200MB). Subsequent builds are fast.
+The first build downloads HuggingFace ML models (~200 MB). Subsequent builds use a cached Docker volume (`hf_cache`), so they are fast.
+
+Services exposed:
+- Frontend: http://localhost:3000
+- Backend API + docs: http://localhost:8000/docs
+- Qdrant dashboard: http://localhost:6333/dashboard
+- MongoDB: localhost:27017
 
 ---
 
@@ -80,92 +115,190 @@ The first build downloads the ML models (~200MB). Subsequent builds are fast.
 ```bash
 cd backend
 
-# Create virtualenv (Python 3.11)
+# Python 3.11 required
 python3.11 -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 
-# Install dependencies
 pip install -r requirements.txt
 
-# Copy and configure env
-cp ../.env.example .env
-# Edit .env
-
-# Start MongoDB and Qdrant (via Docker)
+# Spin up MongoDB and Qdrant locally via Docker
 docker run -d -p 27017:27017 mongo:7
 docker run -d -p 6333:6333 qdrant/qdrant:v1.9.4
 
-# Run the API server
+# Configure environment
+cp ../.env.example .env
+# Edit .env — set GEMINI_API_KEY
+
+# Start the API server
 uvicorn app.main:app --reload --port 8000
 ```
+
+On startup the backend pre-loads both ML models (embedding + cross-encoder) into memory so the first query is fast.
 
 ### Frontend
 
 ```bash
 cd frontend
 npm install
-npm run dev
+npm run dev       # starts Vite dev server
 # Open http://localhost:3000
+```
+
+The Vite dev server proxies `/api` and `/ws` to the backend at `localhost:8000` — no extra config needed.
+
+### Windows (batch helper)
+
+A `setup_local_venv.bat` script is provided for Windows users to bootstrap the backend virtualenv automatically.
+
+---
+
+## CRAG Workflow (Detailed)
+
+```
+User Query
+    │
+    ▼
+Retriever Node
+    │  embed query (all-MiniLM-L6-v2)
+    │  → Qdrant ANN search with per-user payload filter
+    │  → top-K chunks (default K=5)
+    ▼
+Grader Node
+    │  cross-encoder/ms-marco-MiniLM-L-6-v2 scores each (query, chunk) pair
+    │  avg score logged to agent trace
+    │  chunks with score ≥ RELEVANCE_THRESHOLD (default 0.20) kept
+    ▼
+Decision Router
+    ├── relevant chunks found           → Answer Generator
+    ├── iteration < MAX_REWRITE_ITERATIONS → Query Rewriter
+    └── iteration ≥ MAX_REWRITE_ITERATIONS → Web Fallback Node
+         │
+         ├── Query Rewriter Node
+         │       Gemini rewrites query for better retrieval
+         │       iteration counter incremented → back to Retriever
+         │
+         └── Web Fallback Node
+                 Tavily search (requires TAVILY_API_KEY)
+                 results injected as synthetic chunks
+                 → Answer Generator
+    ▼
+Answer Generator Node
+    │  Gemini prompt strictly grounded in retrieved/web chunks
+    │  each source referenced as [Source N]
+    │  citations built with filename, page number, chunk ID, relevance score, text preview
+    ▼
+Response returned with:
+    - answer text
+    - citations list
+    - agent_trace log (every step)
+    - confidence score (avg relevance score of chunks used)
+    - used_web_fallback flag
 ```
 
 ---
 
-## CRAG Workflow
+## Document Ingestion Pipeline
 
-```
-START
-  │
-  ▼
-Retriever Agent
-  │  embed query → Qdrant search → top-8 chunks
-  ▼
-Grading Agent
-  │  cross-encoder/ms-marco-MiniLM-L-6-v2 scores each chunk
-  ▼
-Decision
-  ├── score ≥ 0.5 (relevant chunks found)
-  │     └──→ Answer Generator → END
-  └── score < 0.5 (poor retrieval)
-        └──→ Query Rewriter (Gemini)
-              └──→ Retriever Agent (retry, max 2 iterations)
-                    └──→ Grading Agent
-                          └──→ Answer Generator → END
-```
+Supported formats: **PDF**, **TXT**, **DOCX**
 
-Every answer includes:
-- The generated response grounded in document chunks
-- A Sources block listing filename, page number, and chunk ID
+**PDF extraction** uses a 3-strategy cascade per page:
+1. Plain text (`get_text("text")`) — fastest, works for standard PDFs
+2. Block-level (`get_text("blocks")`) — handles complex layouts
+3. Span-level (`get_text("dict")`) — catches text in complex annotations
+
+Pages yielding fewer than `MIN_CHUNK_WORDS` words are skipped with a warning (image-only/scanned pages). OCR is not currently supported for scanned PDFs.
+
+After extraction, text is chunked with a sliding word window (`CHUNK_SIZE`, `CHUNK_OVERLAP`), embedded in batches, and upserted to Qdrant. Chunk metadata (including `user_id`) is stored in MongoDB so retrieval is always isolated per user.
+
+Document status flows: `processing` → `ready` | `error` (with an error message surfaced to the UI).
 
 ---
 
 ## API Reference
 
-| Method | Endpoint | Description |
-|---|---|---|
-| POST | `/api/auth/register` | Create account |
-| POST | `/api/auth/login` | Get JWT token |
-| GET | `/api/auth/me` | Current user |
-| POST | `/api/documents/upload` | Upload PDF/TXT/DOCX |
-| GET | `/api/documents/` | List documents |
-| DELETE | `/api/documents/{id}` | Delete document + vectors |
-| POST | `/api/chat/query` | Submit query (REST) |
-| GET | `/api/chat/sessions` | List chat sessions |
-| GET | `/api/chat/sessions/{id}/messages` | Get messages in session |
-| WS | `/ws/chat?token=JWT` | Real-time CRAG with streaming logs |
+| Method | Endpoint | Auth | Description |
+|---|---|---|---|
+| POST | `/api/auth/register` | — | Create account |
+| POST | `/api/auth/login` | — | Get JWT token |
+| GET | `/api/auth/me` | JWT | Current user info |
+| POST | `/api/documents/upload` | JWT | Upload PDF / TXT / DOCX; triggers async ingestion |
+| GET | `/api/documents/` | JWT | List user's documents with status |
+| DELETE | `/api/documents/{id}` | JWT | Delete document + its Qdrant vectors |
+| POST | `/api/chat/query` | JWT | REST query — runs CRAG, returns full response |
+| GET | `/api/chat/sessions` | JWT | List user's chat sessions |
+| GET | `/api/chat/sessions/{id}/messages` | JWT | Messages in a session |
+| WS | `/ws/chat?token=<JWT>` | JWT (query param) | WebSocket — streams CRAG agent logs in real time |
+| GET | `/health` | — | Service health + active config values |
+
+Interactive API docs are available at `http://localhost:8000/docs` (Swagger UI).
 
 ---
 
-## Technology Stack
+## Project Structure
 
-| Layer | Technology |
-|---|---|
-| LLM | Google Gemini 1.5 Flash |
-| RAG Framework | LangGraph (CRAG pattern) |
-| Embeddings | sentence-transformers/all-MiniLM-L6-v2 |
-| Reranker | cross-encoder/ms-marco-MiniLM-L-6-v2 |
-| Vector DB | Qdrant |
-| Document DB | MongoDB |
-| Backend | FastAPI (Python 3.11, async) |
-| Frontend | React 18, TypeScript, TailwindCSS |
-| Auth | JWT (python-jose) |
-| Containers | Docker Compose |
+```
+docutrust/
+├── .env.example                  # Environment variable template
+├── docker-compose.yml            # Orchestrates mongo, qdrant, backend, frontend
+├── setup_local_venv.bat          # Windows virtualenv bootstrap helper
+│
+├── backend/
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   └── app/
+│       ├── main.py               # FastAPI app, lifespan startup (DB + model preload)
+│       ├── api/
+│       │   ├── auth.py           # Register / login / me endpoints
+│       │   ├── chat.py           # REST query endpoint, session management
+│       │   ├── documents.py      # Upload / list / delete endpoints
+│       │   └── websocket.py      # WebSocket real-time agent log streaming
+│       ├── core/
+│       │   ├── config.py         # Pydantic settings (all env vars)
+│       │   └── security.py       # JWT creation + verification
+│       ├── db/
+│       │   ├── mongodb.py        # Motor async client, connect/close
+│       │   └── qdrant.py         # Qdrant async client, collection init
+│       ├── models/
+│       │   └── schemas.py        # Pydantic models: User, Document, Chat, Citation, Chunk
+│       ├── rag/
+│       │   └── workflow.py       # LangGraph CRAG graph (all nodes + routing)
+│       └── services/
+│           ├── embedding.py      # sentence-transformers encode (thread-safe singleton)
+│           ├── grader.py         # cross-encoder scoring (dedicated thread pool)
+│           ├── ingestion.py      # Full ingestion pipeline: parse → chunk → embed → upsert
+│           └── parser.py         # PDF (3-strategy) / TXT / DOCX text extraction + chunker
+│
+└── frontend/
+    ├── Dockerfile
+    ├── nginx.conf                # SPA routing + /api proxy to backend
+    ├── index.html
+    ├── package.json
+    ├── vite.config.ts
+    └── src/
+        ├── App.tsx               # Route guard: AuthPage vs WorkspacePage
+        ├── components/
+        │   ├── AgentLogPanel.tsx # Real-time WebSocket log display (middle panel)
+        │   ├── ChatPanel.tsx     # Chat UI with citations display (right panel)
+        │   ├── CitationList.tsx  # Expandable citations with relevance scores
+        │   └── DocumentPanel.tsx # Drag-and-drop upload + document list (left panel)
+        ├── hooks/
+        │   ├── useAuth.tsx       # JWT storage, login/logout, token refresh
+        │   └── useWebSocket.ts   # STOMP-free native WebSocket hook for agent logs
+        ├── pages/
+        │   ├── AuthPage.tsx      # Login + register forms
+        │   └── WorkspacePage.tsx # Three-panel workspace layout
+        ├── services/
+        │   └── api.ts            # Axios instance with JWT interceptor
+        └── types/
+            └── index.ts          # TypeScript interfaces matching backend schemas
+```
+
+---
+
+## Notes
+
+- **Scanned PDFs** (image-only) are not supported — text extraction returns nothing for them. A future OCR layer (e.g. `pytesseract`) would be needed.
+- **Web fallback** requires a valid `TAVILY_API_KEY`. Without it the fallback node logs an error and the answer generator returns a "no relevant information found" message.
+- **HuggingFace models** are cached in a named Docker volume (`hf_cache`) so they survive container restarts without re-downloading.
+- **Per-user isolation** is enforced at the Qdrant query level via a payload filter on `user_id`, so users can only retrieve their own documents.
+- The `RELEVANCE_THRESHOLD` default was lowered to `0.20` (from `0.5` in earlier iterations) to reduce over-triggering of query rewrites on legitimate documents.
