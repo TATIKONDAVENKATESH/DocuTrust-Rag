@@ -13,12 +13,13 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 @router.post("/query", response_model=QueryResponse)
 async def query(payload: QueryRequest, current_user: dict = Depends(get_current_user)):
     db = get_db()
+    user_id: str = current_user["_id"]
 
-    # Resolve or create session
+    # ── Resolve or create chat session ───────────────────────────────────────
     session_id = payload.session_id
     if session_id:
         session = await db["sessions"].find_one(
-            {"_id": session_id, "user_id": current_user["_id"]}
+            {"_id": session_id, "user_id": user_id}
         )
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
@@ -26,13 +27,13 @@ async def query(payload: QueryRequest, current_user: dict = Depends(get_current_
         session_id = str(uuid.uuid4())
         session_doc = {
             "_id": session_id,
-            "user_id": current_user["_id"],
+            "user_id": user_id,
             "title": payload.query[:60],
             "created_at": datetime.utcnow(),
         }
         await db["sessions"].insert_one(session_doc)
 
-    # Log user message
+    # ── Log user message ─────────────────────────────────────────────────────
     await db["messages"].insert_one({
         "_id": str(uuid.uuid4()),
         "session_id": session_id,
@@ -42,14 +43,14 @@ async def query(payload: QueryRequest, current_user: dict = Depends(get_current_
         "created_at": datetime.utcnow(),
     })
 
-    # Run CRAG
-    result = await run_crag(payload.query)
+    # ── Run CRAG (now passes user_id for per-user Qdrant filtering) ──────────
+    result = await run_crag(payload.query, user_id=user_id)
 
     answer = result["answer"]
     citations: list[Citation] = result["citations"]
     logs: list[str] = result["agent_logs"]
 
-    # Format answer with source block
+    # ── Format answer with source block ──────────────────────────────────────
     if citations:
         sources_block = "\n\nSources:\n" + "\n".join(
             f"- {c.filename} | Page: {c.page_number or 'N/A'} | Chunk: {c.chunk_id}"
@@ -59,7 +60,7 @@ async def query(payload: QueryRequest, current_user: dict = Depends(get_current_
     else:
         formatted_answer = f"Answer: {answer}"
 
-    # Log assistant message
+    # ── Log assistant message ─────────────────────────────────────────────────
     await db["messages"].insert_one({
         "_id": str(uuid.uuid4()),
         "session_id": session_id,
@@ -69,11 +70,11 @@ async def query(payload: QueryRequest, current_user: dict = Depends(get_current_
         "created_at": datetime.utcnow(),
     })
 
-    # Log interaction trace
+    # ── Log interaction trace ────────────────────────────────────────────────
     await db["traces"].insert_one({
         "_id": str(uuid.uuid4()),
         "session_id": session_id,
-        "user_id": current_user["_id"],
+        "user_id": user_id,
         "query": payload.query,
         "agent_logs": logs,
         "citation_count": len(citations),

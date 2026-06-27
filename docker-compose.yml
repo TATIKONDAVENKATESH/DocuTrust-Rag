@@ -21,21 +21,32 @@ services:
     ports:
       - "6333:6333"
     healthcheck:
-      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333'"]
+      # Use curl which is available in the qdrant image
+      test: ["CMD", "curl", "-sf", "http://localhost:6333/readyz"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 10s
+      start_period: 15s
 
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      # Always rebuild from scratch when you change requirements.txt
+      # Run:  docker compose build --no-cache backend
     restart: unless-stopped
+    env_file:
+      - .env          # loads GEMINI_API_KEY and SECRET_KEY from .env file
     environment:
       - MONGODB_URL=mongodb://mongo:27017
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - SECRET_KEY=${SECRET_KEY:-change-me-in-production-32chars!!}
+      # GEMINI_API_KEY and SECRET_KEY come from .env above
+      # Python tuning
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+      # Point HuggingFace cache to the mounted volume
+      - HF_HOME=/root/.cache/huggingface
+      - TRANSFORMERS_CACHE=/root/.cache/huggingface
     depends_on:
       mongo:
         condition: service_healthy

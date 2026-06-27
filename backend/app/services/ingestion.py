@@ -22,7 +22,11 @@ async def ingest_document(
     file_type: str,
     user_id: str,
 ) -> int:
+    """
+    Parse *file_path*, embed its chunks, and upsert into Qdrant + MongoDB.
 
+    Returns the number of chunks ingested (0 on failure).
+    """
     db = get_db()
     qdrant = get_qdrant()
 
@@ -30,6 +34,7 @@ async def ingest_document(
         pages = extract_text_with_pages(file_path, file_type)
         all_chunks: List[DocumentChunk] = []
         chunk_index = 0
+
         for page_text, page_number in pages:
             raw_chunks = chunk_text(page_text, settings.CHUNK_SIZE, settings.CHUNK_OVERLAP)
             for raw in raw_chunks:
@@ -50,21 +55,31 @@ async def ingest_document(
         if not all_chunks:
             await db["documents"].update_one(
                 {"_id": document_id},
-                {"$set": {"status": "error", "chunk_count": 0, "error": "No text could be extracted from the file."}},
+                {
+                    "$set": {
+                        "status": "error",
+                        "chunk_count": 0,
+                        "error": "No text could be extracted from the file.",
+                    }
+                },
             )
             return 0
 
+        # ── Embed all chunks (runs in thread pool to avoid blocking event loop) ──
         texts = [c.text for c in all_chunks]
         loop = asyncio.get_running_loop()
         embeddings = await loop.run_in_executor(None, embed_texts, texts)
 
+        # ── Build Qdrant points ──────────────────────────────────────────────
+        # qdrant-client accepts UUID strings as point IDs (converted internally).
         points = [
             PointStruct(
-                id=chunk.chunk_id,
+                id=chunk.chunk_id,          # UUID string — qdrant-client handles it
                 vector=embeddings[i],
                 payload={
                     "chunk_id": chunk.chunk_id,
                     "document_id": chunk.document_id,
+                    "user_id": user_id,     # stored so retrieval can filter per-user
                     "filename": chunk.filename,
                     "text": chunk.text,
                     "page_number": chunk.page_number,
@@ -74,17 +89,20 @@ async def ingest_document(
             for i, chunk in enumerate(all_chunks)
         ]
 
-        batch_size = 256
+        # ── Upsert in batches to avoid large payloads ────────────────────────
+        batch_size = 128
         for i in range(0, len(points), batch_size):
             await qdrant.upsert(
                 collection_name=settings.QDRANT_COLLECTION,
-                points=points[i : i + batch_size],
+                points=points[i: i + batch_size],
             )
 
+        # ── Persist chunk metadata in MongoDB ───────────────────────────────
         chunk_docs = [
             {
                 "_id": c.chunk_id,
                 "document_id": c.document_id,
+                "user_id": user_id,
                 "filename": c.filename,
                 "text": c.text,
                 "page_number": c.page_number,
@@ -94,10 +112,13 @@ async def ingest_document(
         ]
         await db["chunks"].insert_many(chunk_docs, ordered=False)
 
-        # Update document status — clear any previous error field
+        # ── Mark document as ready ───────────────────────────────────────────
         await db["documents"].update_one(
             {"_id": document_id},
-            {"$set": {"status": "ready", "chunk_count": len(all_chunks)}, "$unset": {"error": ""}},
+            {
+                "$set": {"status": "ready", "chunk_count": len(all_chunks)},
+                "$unset": {"error": ""},
+            },
         )
 
         logger.info(f"Ingested {len(all_chunks)} chunks for document {document_id}")

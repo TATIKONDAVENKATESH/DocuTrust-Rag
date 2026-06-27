@@ -17,15 +17,15 @@ async def websocket_chat(websocket: WebSocket, token: str = Query(...)):
         await websocket.close(code=4001)
         return
 
+    user_id: str = payload.get("sub", "")
     await websocket.accept()
-    logger.info(f"WebSocket connected for user {payload.get('sub')}")
+    logger.info(f"WebSocket connected for user {user_id}")
 
     try:
         while True:
             try:
                 raw = await asyncio.wait_for(websocket.receive_text(), timeout=300)
             except asyncio.TimeoutError:
-                # Send a ping to keep connection alive
                 await websocket.send_text(json.dumps({"type": "ping"}))
                 continue
 
@@ -49,7 +49,8 @@ async def websocket_chat(websocket: WebSocket, token: str = Query(...)):
                     pass
 
             try:
-                result = await run_crag(query, log_callback=log_callback)
+                # Pass user_id so Qdrant filters to this user's documents only
+                result = await run_crag(query, user_id=user_id, log_callback=log_callback)
             except Exception as exc:
                 logger.exception(f"CRAG error: {exc}")
                 await websocket.send_text(
@@ -67,7 +68,7 @@ async def websocket_chat(websocket: WebSocket, token: str = Query(...)):
             )
 
     except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected for user {payload.get('sub')}")
+        logger.info(f"WebSocket disconnected for user {user_id}")
     except Exception as exc:
         logger.exception(f"WebSocket error: {exc}")
         try:

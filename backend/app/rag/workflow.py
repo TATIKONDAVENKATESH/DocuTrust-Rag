@@ -18,10 +18,11 @@ from duckduckgo_search import DDGS
 logger = logging.getLogger(__name__)
 
 _DDG_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ddg")
-
 _EMBED_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="embed")
 
+
 def _get_llm() -> ChatGoogleGenerativeAI:
+    # Safety settings import moved inside to avoid import-time side effects
     from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
     safety_settings = {
@@ -39,8 +40,10 @@ def _get_llm() -> ChatGoogleGenerativeAI:
         convert_system_message_to_human=True,
     )
 
+
 class RAGState(TypedDict):
     query: str
+    user_id: str                    # used to filter Qdrant results per user
     retrieved_chunks: List[dict]
     scores: List[float]
     relevant_chunks: List[dict]
@@ -51,13 +54,30 @@ class RAGState(TypedDict):
     iteration: int
     used_web_fallback: bool
 
-async def _retrieve(query: str) -> List[dict]:
+
+# ── Retrieval ─────────────────────────────────────────────────────────────────
+
+async def _retrieve(query: str, user_id: str) -> List[dict]:
+    """
+    Search Qdrant for the top-K chunks relevant to *query*.
+
+    Filters by *user_id* so users only see their own documents.
+    """
+    from qdrant_client.models import Filter, FieldCondition, MatchValue
+
     qdrant = get_qdrant()
     loop = asyncio.get_running_loop()
     vector = await loop.run_in_executor(_EMBED_EXECUTOR, embed_query, query)
+
+    # Per-user filter: only retrieve chunks uploaded by this user
+    user_filter = Filter(
+        must=[FieldCondition(key="user_id", match=MatchValue(value=user_id))]
+    )
+
     results = await qdrant.search(
         collection_name=settings.QDRANT_COLLECTION,
         query_vector=vector,
+        query_filter=user_filter,
         limit=settings.TOP_K_RETRIEVAL,
         with_payload=True,
     )
@@ -72,6 +92,7 @@ def _ensure_citations(raw: list) -> List[Citation]:
         elif isinstance(item, dict):
             result.append(Citation(**item))
     return result
+
 
 async def _invoke_llm_safe(llm: ChatGoogleGenerativeAI, prompt: str) -> str:
     try:
@@ -89,13 +110,19 @@ async def _invoke_llm_safe(llm: ChatGoogleGenerativeAI, prompt: str) -> str:
     except Exception as exc:
         raise RuntimeError(f"Gemini API call failed: {exc}") from exc
 
+
+# ── Graph nodes ───────────────────────────────────────────────────────────────
+
 async def retriever_node(state: RAGState) -> dict:
     query = state.get("rewritten_query") or state["query"]
+    user_id = state["user_id"]
     logs = list(state["agent_logs"])
     logs.append("Retrieving chunks...")
-    chunks = await _retrieve(query)
+
+    chunks = await _retrieve(query, user_id)
     logs.append(f"Retrieved {len(chunks)} chunks.")
     return {"retrieved_chunks": chunks, "agent_logs": logs}
+
 
 async def grader_node(state: RAGState) -> dict:
     query = state.get("rewritten_query") or state["query"]
@@ -152,7 +179,6 @@ async def web_fallback_node(state: RAGState) -> dict:
 
     web_chunks: List[dict] = []
     try:
-
         loop = asyncio.get_running_loop()
 
         def _ddg_search() -> list:
@@ -170,6 +196,7 @@ async def web_fallback_node(state: RAGState) -> dict:
             web_chunks.append({
                 "chunk_id": f"web-{i}",
                 "document_id": "web",
+                "user_id": state["user_id"],
                 "filename": f"Web: {url}",
                 "text": f"{title}\n{snippet}",
                 "page_number": None,
@@ -186,6 +213,7 @@ async def web_fallback_node(state: RAGState) -> dict:
         "agent_logs": logs,
         "used_web_fallback": True,
     }
+
 
 async def answer_generator_node(state: RAGState) -> dict:
     query = state.get("rewritten_query") or state["query"]
@@ -249,6 +277,9 @@ async def answer_generator_node(state: RAGState) -> dict:
 
     return {"answer": answer_text, "citations": citations, "agent_logs": logs}
 
+
+# ── Graph routing ─────────────────────────────────────────────────────────────
+
 def should_rewrite_or_fallback(state: RAGState) -> str:
     relevant = state.get("relevant_chunks", [])
     iteration = state.get("iteration", 0)
@@ -258,6 +289,9 @@ def should_rewrite_or_fallback(state: RAGState) -> str:
     if iteration >= settings.MAX_REWRITE_ITERATIONS:
         return "web_fallback"
     return "rewrite"
+
+
+# ── Graph construction ────────────────────────────────────────────────────────
 
 def build_crag_graph():
     builder = StateGraph(RAGState)
@@ -283,7 +317,9 @@ def build_crag_graph():
     builder.add_edge("generator", END)
     return builder.compile()
 
+
 _graph = None
+
 
 def get_crag_graph():
     global _graph
@@ -291,13 +327,29 @@ def get_crag_graph():
         _graph = build_crag_graph()
     return _graph
 
+
+# ── Public entry point ────────────────────────────────────────────────────────
+
 async def run_crag(
     query: str,
+    user_id: str,
     log_callback: Optional[Callable[[str], Awaitable[None]]] = None,
 ) -> dict:
+    """
+    Execute the CRAG pipeline for *query* issued by *user_id*.
+
+    Args:
+        query:        The user's question.
+        user_id:      ID of the authenticated user (used to filter Qdrant results).
+        log_callback: Optional async callable that receives each log line in real-time.
+
+    Returns:
+        Dict with keys: answer, citations, agent_logs.
+    """
     graph = get_crag_graph()
     initial_state: RAGState = {
         "query": query,
+        "user_id": user_id,
         "retrieved_chunks": [],
         "scores": [],
         "relevant_chunks": [],
