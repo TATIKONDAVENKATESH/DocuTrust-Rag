@@ -12,6 +12,13 @@ class Settings(BaseSettings):
     QDRANT_PORT: int = 6333
     QDRANT_COLLECTION: str = "documents"
 
+    # ── CORS ─────────────────────────────────────────────────────────────────────
+    CORS_ORIGINS: str = "*"
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [o.strip() for o in self.CORS_ORIGINS.split(",")]
+
     # ── Gemini ───────────────────────────────────────────────────────────────
     GEMINI_API_KEY: str
 
