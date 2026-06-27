@@ -7,13 +7,14 @@ from typing import List, Optional, TypedDict, Callable, Awaitable
 
 from langgraph.graph import StateGraph, END
 from langchain_google_genai import ChatGoogleGenerativeAI
-
+from qdrant_client.models import Filter, FieldCondition, MatchValue
 from app.core.config import settings
 from app.db.qdrant import get_qdrant
 from app.models.schemas import Citation
 from app.services.embedding import embed_query
 from app.services.grader import grade_chunks_async
 from duckduckgo_search import DDGS
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 logger = logging.getLogger(__name__)
 
@@ -21,11 +22,6 @@ _DDG_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ddg")
 _EMBED_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="embed")
 
 # ── Cached LLM client ──────────────────────────────────────────────────────
-# Previously _get_llm() built a brand-new ChatGoogleGenerativeAI (and
-# re-imported google.generativeai.types) on *every* call to the rewriter
-# and generator nodes. That's wasted setup cost per query. Build it once
-# and reuse it; only fail at call time (not at module import time) if the
-# key is missing, so a missing GEMINI_API_KEY never takes down auth/upload.
 _llm: Optional[ChatGoogleGenerativeAI] = None
 
 
@@ -39,8 +35,6 @@ def _get_llm() -> ChatGoogleGenerativeAI:
             "GEMINI_API_KEY is not configured. Set it in your .env file to "
             "enable query rewriting and answer generation."
         )
-
-    from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
     safety_settings = {
         HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
@@ -77,13 +71,6 @@ class RAGState(TypedDict):
 # ── Retrieval ─────────────────────────────────────────────────────────────────
 
 async def _retrieve(query: str, user_id: str) -> List[dict]:
-    """
-    Search Qdrant for the top-K chunks relevant to *query*.
-
-    Filters by *user_id* so users only see their own documents.
-    """
-    from qdrant_client.models import Filter, FieldCondition, MatchValue
-
     qdrant = get_qdrant()
     loop = asyncio.get_running_loop()
     vector = await loop.run_in_executor(_EMBED_EXECUTOR, embed_query, query)
@@ -133,11 +120,6 @@ async def _invoke_llm_safe(llm: ChatGoogleGenerativeAI, prompt: str) -> str:
 async def _grade_and_filter(
     query: str, chunks: List[dict], logs: List[str]
 ) -> tuple[List[float], List[dict], List[float]]:
-    """
-    Shared grading helper used by both the initial retrieval grading pass
-    and the post-web-fallback re-grading pass, so both paths apply the
-    exact same relevance threshold logic.
-    """
     if not chunks:
         logs.append("No chunks to grade.")
         return [], [], []
@@ -248,12 +230,6 @@ async def web_fallback_node(state: RAGState) -> dict:
         logs.append(f"Web search failed: {exc}")
 
     # ── Re-grade web results ──────────────────────────────────────────────
-    # The CRAG spec requires: web fallback → retrieve → RE-GRADE → generate.
-    # Previously this node piped raw, ungraded web snippets straight to the
-    # generator, which defeats the point of corrective grading — an
-    # off-topic or low-quality web result would go straight into the answer
-    # with no validation. Grade them through the same cross-encoder
-    # threshold as document chunks before they're allowed to be "relevant".
     logs.append("Re-grading web search results...")
     _, relevant, relevant_scores = await _grade_and_filter(query, web_chunks, logs)
 
@@ -389,19 +365,6 @@ async def run_crag(
     user_id: str,
     log_callback: Optional[Callable[[str], Awaitable[None]]] = None,
 ) -> dict:
-    """
-    Execute the CRAG pipeline for *query* issued by *user_id*.
-
-    Args:
-        query:        The user's question.
-        user_id:      ID of the authenticated user (used to filter Qdrant results).
-        log_callback: Optional async callable that receives each log line in real-time.
-
-    Returns:
-        Dict with keys: answer, citations, agent_logs, confidence,
-        used_web_fallback, retrieved_chunks (previews of every chunk the
-        grader actually scored, for UI display).
-    """
     graph = get_crag_graph()
     initial_state: RAGState = {
         "query": query,

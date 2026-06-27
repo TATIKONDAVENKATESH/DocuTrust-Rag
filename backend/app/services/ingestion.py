@@ -2,8 +2,6 @@ import uuid
 import asyncio
 import logging
 from typing import List
-from datetime import datetime
-
 from app.core.config import settings
 from app.db.mongodb import get_db
 from app.db.qdrant import get_qdrant
@@ -22,11 +20,6 @@ async def ingest_document(
     file_type: str,
     user_id: str,
 ) -> int:
-    """
-    Parse *file_path*, embed its chunks, and upsert into Qdrant + MongoDB.
-
-    Returns the number of chunks ingested (0 on failure).
-    """
     db = get_db()
     qdrant = get_qdrant()
 

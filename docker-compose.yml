@@ -30,20 +30,15 @@ services:
   backend:
     build:
       context: ./backend
-      # Always rebuild from scratch when you change requirements.txt
-      # Run:  docker compose build --no-cache backend
     restart: unless-stopped
     env_file:
-      - .env          # loads GEMINI_API_KEY and SECRET_KEY from .env file
+      - .env
     environment:
       - MONGODB_URL=mongodb://mongo:27017
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
-      # GEMINI_API_KEY and SECRET_KEY come from .env above
-      # Python tuning
       - PYTHONUNBUFFERED=1
       - PYTHONDONTWRITEBYTECODE=1
-      # Point HuggingFace cache to the mounted volume
       - HF_HOME=/root/.cache/huggingface
       - TRANSFORMERS_CACHE=/root/.cache/huggingface
     depends_on:

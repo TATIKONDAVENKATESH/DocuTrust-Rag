@@ -1,6 +1,5 @@
 import fitz  # PyMuPDF
 import docx
-from pathlib import Path
 from typing import List, Tuple
 from app.core.config import settings
 import logging
@@ -109,7 +108,6 @@ def _extract_txt(path: str) -> List[Tuple[str, int]]:
         content = f.read().strip()
     return [(content, 1)] if content else []
 
-
 def _extract_docx(path: str) -> List[Tuple[str, int]]:
     doc = docx.Document(path)
     paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
@@ -118,17 +116,6 @@ def _extract_docx(path: str) -> List[Tuple[str, int]]:
 
 
 def chunk_text(text: str, chunk_size: int, overlap: int) -> List[str]:
-    """
-    Split *text* into overlapping word-based chunks.
-
-    Args:
-        text:       Input text string.
-        chunk_size: Maximum number of words per chunk (from settings.CHUNK_SIZE).
-        overlap:    Number of words shared between consecutive chunks.
-
-    Returns:
-        List of non-empty chunk strings that meet the minimum word threshold.
-    """
     words = text.split()
     if not words:
         return []

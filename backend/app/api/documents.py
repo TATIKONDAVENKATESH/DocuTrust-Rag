@@ -1,20 +1,19 @@
 import uuid
 import os
-import asyncio
 from datetime import datetime
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, BackgroundTasks
 import aiofiles
-
 from app.api.auth import get_current_user
 from app.core.config import settings
 from app.db.mongodb import get_db
 from app.models.schemas import DocumentOut
 from app.services.ingestion import ingest_document
+from app.db.qdrant import get_qdrant
+from qdrant_client.models import Filter, FieldCondition, MatchValue, FilterSelector
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 ALLOWED_EXTENSIONS = {"pdf", "txt", "docx"}
-
 
 def _get_extension(filename: str) -> str:
     return filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
@@ -122,8 +121,6 @@ async def delete_document(document_id: str, current_user: dict = Depends(get_cur
 
     # Remove matching vectors from Qdrant
     try:
-        from app.db.qdrant import get_qdrant
-        from qdrant_client.models import Filter, FieldCondition, MatchValue, FilterSelector
         qdrant = get_qdrant()
         await qdrant.delete(
             collection_name=settings.QDRANT_COLLECTION,
