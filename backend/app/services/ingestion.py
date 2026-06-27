@@ -22,20 +22,11 @@ async def ingest_document(
     file_type: str,
     user_id: str,
 ) -> int:
-    """
-    Full ingestion pipeline:
-    1. Extract text with page numbers
-    2. Chunk text
-    3. Embed chunks
-    4. Store in Qdrant  (id must be str or int — NOT uuid.UUID object)
-    5. Store chunk metadata in MongoDB
-    Returns total number of chunks stored.
-    """
+
     db = get_db()
     qdrant = get_qdrant()
 
     try:
-        # 1 & 2: Extract + chunk
         pages = extract_text_with_pages(file_path, file_type)
         all_chunks: List[DocumentChunk] = []
         chunk_index = 0
@@ -63,17 +54,13 @@ async def ingest_document(
             )
             return 0
 
-        # 3: Embed (run in thread pool — sentence-transformers is sync)
         texts = [c.text for c in all_chunks]
         loop = asyncio.get_running_loop()
         embeddings = await loop.run_in_executor(None, embed_texts, texts)
 
-        # 4: Upsert to Qdrant
-        # FIX: qdrant-client PointStruct.id must be str or int, NOT uuid.UUID.
-        # Passing uuid.UUID raises pydantic validation error in qdrant-client 1.9.x.
         points = [
             PointStruct(
-                id=chunk.chunk_id,          # str — correct for all qdrant-client versions
+                id=chunk.chunk_id,
                 vector=embeddings[i],
                 payload={
                     "chunk_id": chunk.chunk_id,
@@ -87,7 +74,6 @@ async def ingest_document(
             for i, chunk in enumerate(all_chunks)
         ]
 
-        # Upsert in batches of 256 to avoid request size limits
         batch_size = 256
         for i in range(0, len(points), batch_size):
             await qdrant.upsert(
@@ -95,7 +81,6 @@ async def ingest_document(
                 points=points[i : i + batch_size],
             )
 
-        # 5: Persist chunk metadata in MongoDB
         chunk_docs = [
             {
                 "_id": c.chunk_id,

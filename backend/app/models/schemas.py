@@ -2,14 +2,12 @@ from pydantic import BaseModel, Field, EmailStr
 from typing import Optional, List
 from datetime import datetime
 
-
 # ── User ────────────────────────────────────────────────────────────────────
 
 class UserCreate(BaseModel):
     email: EmailStr
     password: str
     full_name: str
-
 
 class UserInDB(BaseModel):
     id: str
@@ -18,19 +16,16 @@ class UserInDB(BaseModel):
     hashed_password: str
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
-
 class UserOut(BaseModel):
     id: str
     email: str
     full_name: str
     created_at: datetime
 
-
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserOut
-
 
 # ── Document ─────────────────────────────────────────────────────────────────
 
@@ -45,7 +40,6 @@ class DocumentMetadata(BaseModel):
     status: str = "processing"  # processing | ready | error
     error: Optional[str] = None
 
-
 class DocumentOut(BaseModel):
     id: str
     filename: str
@@ -56,7 +50,6 @@ class DocumentOut(BaseModel):
     status: str
     error: Optional[str] = None  # populated when status == "error"
 
-
 # ── Chat ─────────────────────────────────────────────────────────────────────
 
 class Citation(BaseModel):
@@ -64,13 +57,11 @@ class Citation(BaseModel):
     page_number: Optional[int]
     chunk_id: str
 
-
 class ChatMessage(BaseModel):
     role: str  # user | assistant
     content: str
     citations: List[Citation] = []
     created_at: datetime = Field(default_factory=datetime.utcnow)
-
 
 class ChatSession(BaseModel):
     id: str
@@ -79,18 +70,15 @@ class ChatSession(BaseModel):
     messages: List[ChatMessage] = []
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
-
 class QueryRequest(BaseModel):
     query: str
     session_id: Optional[str] = None
-
 
 class QueryResponse(BaseModel):
     session_id: str
     answer: str
     citations: List[Citation]
     agent_trace: List[str]
-
 
 # ── Chunk ────────────────────────────────────────────────────────────────────
 

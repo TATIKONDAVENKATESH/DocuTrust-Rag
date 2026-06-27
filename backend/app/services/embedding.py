@@ -7,19 +7,11 @@ logger = logging.getLogger(__name__)
 
 _model: SentenceTransformer = None
 
-
 def load_embedding_model() -> None:
-    """
-    Eagerly load the embedding model at startup.
-    Call this from the FastAPI lifespan so the model is warm before any request arrives.
-    A cold load takes 10-30s on CPU; doing it lazily inside a background task causes
-    the first upload's ingestion to time-out or appear to silently fail.
-    """
     global _model
     logger.info(f"Loading embedding model: {settings.EMBEDDING_MODEL}")
     _model = SentenceTransformer(settings.EMBEDDING_MODEL)
     logger.info("Embedding model loaded.")
-
 
 def get_embedding_model() -> SentenceTransformer:
     global _model

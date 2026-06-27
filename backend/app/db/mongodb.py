@@ -12,7 +12,6 @@ async def connect_db() -> None:
     await _ensure_indexes()
     logger.info("MongoDB connected and indexes ensured.")
 
-
 async def _ensure_indexes() -> None:
     db = _client[settings.MONGODB_DB]
     # users
@@ -32,13 +31,11 @@ async def _ensure_indexes() -> None:
     await db["traces"].create_index("user_id")
     await db["traces"].create_index("session_id")
 
-
 async def close_db() -> None:
     global _client
     if _client:
         _client.close()
         logger.info("MongoDB connection closed.")
-
 
 def get_db() -> AsyncIOMotorDatabase:
     return _client[settings.MONGODB_DB]

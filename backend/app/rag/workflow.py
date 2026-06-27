@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional, TypedDict, Callable, Awaitable
 
 from langgraph.graph import StateGraph, END
@@ -11,14 +12,32 @@ from app.core.config import settings
 from app.db.qdrant import get_qdrant
 from app.models.schemas import Citation
 from app.services.embedding import embed_query
-from app.services.grader import grade_chunks
+from app.services.grader import grade_chunks_async
+from duckduckgo_search import DDGS
 
 logger = logging.getLogger(__name__)
 
-MAX_REWRITE_ITERATIONS = 2
+_DDG_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ddg")
 
+_EMBED_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="embed")
 
-# ── State ────────────────────────────────────────────────────────────────────
+def _get_llm() -> ChatGoogleGenerativeAI:
+    from google.generativeai.types import HarmCategory, HarmBlockThreshold
+
+    safety_settings = {
+        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+    }
+
+    return ChatGoogleGenerativeAI(
+        model="gemini-1.5-flash",
+        google_api_key=settings.GEMINI_API_KEY,
+        temperature=0.2,
+        safety_settings=safety_settings,
+        convert_system_message_to_human=True,
+    )
 
 class RAGState(TypedDict):
     query: str
@@ -32,13 +51,10 @@ class RAGState(TypedDict):
     iteration: int
     used_web_fallback: bool
 
-
-# ── Helpers ──────────────────────────────────────────────────────────────────
-
 async def _retrieve(query: str) -> List[dict]:
     qdrant = get_qdrant()
     loop = asyncio.get_running_loop()
-    vector = await loop.run_in_executor(None, embed_query, query)
+    vector = await loop.run_in_executor(_EMBED_EXECUTOR, embed_query, query)
     results = await qdrant.search(
         collection_name=settings.QDRANT_COLLECTION,
         query_vector=vector,
@@ -48,20 +64,7 @@ async def _retrieve(query: str) -> List[dict]:
     return [r.payload for r in results]
 
 
-def _get_llm() -> ChatGoogleGenerativeAI:
-    return ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
-        google_api_key=settings.GEMINI_API_KEY,
-        temperature=0.2,
-    )
-
-
 def _ensure_citations(raw: list) -> List[Citation]:
-    """
-    Langgraph astream merges partial node state via dict.update(), which means
-    the citations field may arrive as a list of dicts (serialized) rather than
-    Citation objects after a merge step. This helper normalises either form.
-    """
     result = []
     for item in raw:
         if isinstance(item, Citation):
@@ -70,8 +73,21 @@ def _ensure_citations(raw: list) -> List[Citation]:
             result.append(Citation(**item))
     return result
 
-
-# ── Nodes ────────────────────────────────────────────────────────────────────
+async def _invoke_llm_safe(llm: ChatGoogleGenerativeAI, prompt: str) -> str:
+    try:
+        response = await llm.ainvoke(prompt)
+        content = response.content
+        if content is None or (isinstance(content, str) and not content.strip()):
+            raise RuntimeError(
+                "Gemini returned an empty response. "
+                "This usually means the content was blocked by safety filters "
+                "or the API key quota was exceeded."
+            )
+        return content.strip()
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(f"Gemini API call failed: {exc}") from exc
 
 async def retriever_node(state: RAGState) -> dict:
     query = state.get("rewritten_query") or state["query"]
@@ -80,7 +96,6 @@ async def retriever_node(state: RAGState) -> dict:
     chunks = await _retrieve(query)
     logs.append(f"Retrieved {len(chunks)} chunks.")
     return {"retrieved_chunks": chunks, "agent_logs": logs}
-
 
 async def grader_node(state: RAGState) -> dict:
     query = state.get("rewritten_query") or state["query"]
@@ -92,9 +107,8 @@ async def grader_node(state: RAGState) -> dict:
         logs.append("No chunks to grade.")
         return {"scores": [], "relevant_chunks": [], "agent_logs": logs}
 
-    loop = asyncio.get_running_loop()
     texts = [c["text"] for c in chunks]
-    scores: List[float] = await loop.run_in_executor(None, grade_chunks, query, texts)
+    scores: List[float] = await grade_chunks_async(query, texts)
 
     avg_score = sum(scores) / len(scores) if scores else 0.0
     logs.append(f"Relevance score: {avg_score:.2f}")
@@ -118,14 +132,12 @@ async def query_rewriter_node(state: RAGState) -> dict:
         f"Return ONLY the rewritten query text, nothing else."
     )
     try:
-        response = await llm.ainvoke(prompt)
-        rewritten = response.content.strip()
+        rewritten = await _invoke_llm_safe(llm, prompt)
     except Exception as exc:
         logger.warning(f"Query rewrite failed: {exc}. Using original query.")
         rewritten = original_query
 
     logs.append(f"Rewritten query: {rewritten}")
-
     return {
         "rewritten_query": rewritten,
         "agent_logs": logs,
@@ -134,27 +146,20 @@ async def query_rewriter_node(state: RAGState) -> dict:
 
 
 async def web_fallback_node(state: RAGState) -> dict:
-    """
-    DuckDuckGo web search fallback.
-    Triggered when document retrieval + rewriting still yields no relevant chunks.
-    Fetches real web results and converts them to pseudo-chunks for the generator.
-    Citation filename is set to 'Web: <url>' so the UI can distinguish web sources.
-    """
     query = state.get("rewritten_query") or state["query"]
     logs = list(state["agent_logs"])
     logs.append("No relevant document chunks found. Falling back to web search...")
 
     web_chunks: List[dict] = []
     try:
-        from duckduckgo_search import DDGS
 
         loop = asyncio.get_running_loop()
 
         def _ddg_search() -> list:
-            with DDGS() as ddgs:
+            with DDGS(timeout=settings.DDG_TIMEOUT) as ddgs:
                 return list(ddgs.text(query, max_results=5))
 
-        results = await loop.run_in_executor(None, _ddg_search)
+        results = await loop.run_in_executor(_DDG_EXECUTOR, _ddg_search)
 
         for i, r in enumerate(results):
             snippet = r.get("body", "").strip()
@@ -182,7 +187,6 @@ async def web_fallback_node(state: RAGState) -> dict:
         "used_web_fallback": True,
     }
 
-
 async def answer_generator_node(state: RAGState) -> dict:
     query = state.get("rewritten_query") or state["query"]
     relevant = state["relevant_chunks"]
@@ -197,7 +201,6 @@ async def answer_generator_node(state: RAGState) -> dict:
         logs.append("Answer generated (no relevant chunks found).")
         return {"answer": answer, "citations": [], "agent_logs": logs}
 
-    # Build context block
     context_parts = []
     for i, chunk in enumerate(relevant, start=1):
         context_parts.append(
@@ -225,11 +228,15 @@ async def answer_generator_node(state: RAGState) -> dict:
 
     llm = _get_llm()
     try:
-        response = await llm.ainvoke(prompt)
-        answer_text = response.content.strip()
+        answer_text = await _invoke_llm_safe(llm, prompt)
+        logs.append("Answer generated.")
     except Exception as exc:
         logger.exception(f"Answer generation failed: {exc}")
-        answer_text = "An error occurred while generating the answer. Please try again."
+        answer_text = (
+            f"Answer generation failed: {exc}. "
+            "Check your GEMINI_API_KEY and API quota."
+        )
+        logs.append(f"Answer generation failed: {exc}")
 
     citations = [
         Citation(
@@ -240,30 +247,17 @@ async def answer_generator_node(state: RAGState) -> dict:
         for i, chunk in enumerate(relevant)
     ]
 
-    logs.append("Answer generated.")
     return {"answer": answer_text, "citations": citations, "agent_logs": logs}
 
-
-# ── Routing ──────────────────────────────────────────────────────────────────
-
 def should_rewrite_or_fallback(state: RAGState) -> str:
-    """
-    After grading:
-    - If relevant chunks exist → generate answer directly.
-    - If no relevant chunks and iterations remain → rewrite query and retry.
-    - If no relevant chunks and iterations exhausted → trigger web fallback.
-    """
     relevant = state.get("relevant_chunks", [])
     iteration = state.get("iteration", 0)
 
     if relevant:
         return "generate"
-    if iteration >= MAX_REWRITE_ITERATIONS:
+    if iteration >= settings.MAX_REWRITE_ITERATIONS:
         return "web_fallback"
     return "rewrite"
-
-
-# ── Graph Assembly ────────────────────────────────────────────────────────────
 
 def build_crag_graph():
     builder = StateGraph(RAGState)
@@ -289,9 +283,7 @@ def build_crag_graph():
     builder.add_edge("generator", END)
     return builder.compile()
 
-
 _graph = None
-
 
 def get_crag_graph():
     global _graph
@@ -299,17 +291,10 @@ def get_crag_graph():
         _graph = build_crag_graph()
     return _graph
 
-
-# ── Public Runner ─────────────────────────────────────────────────────────────
-
 async def run_crag(
     query: str,
     log_callback: Optional[Callable[[str], Awaitable[None]]] = None,
 ) -> dict:
-    """
-    Execute the CRAG graph and return {answer, citations, agent_logs}.
-    log_callback receives each new log line as it is emitted by agent nodes.
-    """
     graph = get_crag_graph()
     initial_state: RAGState = {
         "query": query,
@@ -339,7 +324,6 @@ async def run_crag(
                         pass
             seen_logs = len(current_logs)
 
-    # Normalise citations — langgraph streaming may have left them as dicts
     raw_citations = accumulated.get("citations", [])
     citations = _ensure_citations(raw_citations)
 

@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.db.mongodb import connect_db, close_db
 from app.db.qdrant import connect_qdrant, close_qdrant
 from app.api import auth, documents, chat, websocket
+from app.core.config import settings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,21 +22,24 @@ async def lifespan(app: FastAPI):
     await connect_db()
     await connect_qdrant()
 
-    # Eagerly load ML models so the first upload doesn't hit a cold-start timeout.
-    # Both models are CPU-only and may take 10-30s on first download.
     import asyncio
     loop = asyncio.get_running_loop()
 
+    # Pre-load embedding model (always needed, ~10-30s on first Docker start)
     logger.info("Pre-loading embedding model…")
     from app.services.embedding import load_embedding_model
     await loop.run_in_executor(None, load_embedding_model)
 
+    # Pre-load cross-encoder into _GRADER_EXECUTOR (dedicated pool).
+    # Doing this at startup means the first query doesn't pay the cold-start cost.
+    # The cross-encoder is the local grading model required by the problem statement.
     logger.info("Pre-loading cross-encoder model…")
-    from app.services.grader import load_cross_encoder
-    await loop.run_in_executor(None, load_cross_encoder)
+    from app.services.grader import load_cross_encoder, _GRADER_EXECUTOR
+    await loop.run_in_executor(_GRADER_EXECUTOR, load_cross_encoder)
 
     logger.info("All services connected and models loaded.")
     yield
+
     await close_db()
     await close_qdrant()
     logger.info("Shutdown complete.")
@@ -64,4 +68,10 @@ app.include_router(websocket.router)
 
 @app.get("/health", tags=["meta"])
 async def health():
-    return {"status": "ok", "version": "1.0.0"}
+    return {
+        "status": "ok",
+        "version": "1.0.0",
+        "relevance_threshold": settings.RELEVANCE_THRESHOLD,
+        "max_rewrite_iterations": settings.MAX_REWRITE_ITERATIONS,
+        "ddg_timeout": settings.DDG_TIMEOUT,
+    }

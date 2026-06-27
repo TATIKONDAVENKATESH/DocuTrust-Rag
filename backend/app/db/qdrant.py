@@ -10,7 +10,6 @@ async def connect_qdrant() -> None:
     _client = AsyncQdrantClient(host=settings.QDRANT_HOST, port=settings.QDRANT_PORT)
     await _ensure_collection()
 
-
 async def _ensure_collection() -> None:
     exists = await _client.collection_exists(settings.QDRANT_COLLECTION)
     if not exists:
@@ -19,12 +18,10 @@ async def _ensure_collection() -> None:
             vectors_config=VectorParams(size=384, distance=Distance.COSINE),
         )
 
-
 async def close_qdrant() -> None:
     global _client
     if _client:
         await _client.close()
-
 
 def get_qdrant() -> AsyncQdrantClient:
     return _client
