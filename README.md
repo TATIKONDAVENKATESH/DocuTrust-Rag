@@ -2,6 +2,8 @@
 
 Self-correcting Retrieval-Augmented Generation platform for enterprise document intelligence. Built with LangGraph (CRAG pattern), FastAPI, React/TypeScript, MongoDB, and Qdrant.
 
+🚀 **Live Demo:** [https://docu-trust-rag-trvc.vercel.app/](https://docu-trust-rag-trvc.vercel.app/)
+
 ---
 
 ## Architecture Overview
