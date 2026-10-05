@@ -24,14 +24,12 @@ async def lifespan(app: FastAPI):
 
     loop = asyncio.get_running_loop()
 
-    # Preload embedding model (always needed, ~10-30s on first Docker start)
-    logger.info("Pre-loading embedding model…")
-
-    await loop.run_in_executor(None, load_embedding_model)
-
-    logger.info("Pre-loading cross-encoder model…")
-
-    await loop.run_in_executor(_GRADER_EXECUTOR, load_cross_encoder)
+    # [NOTE] Pre-loading is disabled to save memory on Render's 512MB free tier.
+    # The models will automatically load lazily the first time a user uploads a document or sends a chat query.
+    # logger.info("Pre-loading embedding model…")
+    # await loop.run_in_executor(None, load_embedding_model)
+    # logger.info("Pre-loading cross-encoder model…")
+    # await loop.run_in_executor(_GRADER_EXECUTOR, load_cross_encoder)
 
     logger.info("All services connected and models loaded.")
     yield
