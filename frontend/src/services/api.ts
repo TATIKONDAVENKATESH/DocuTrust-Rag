@@ -1,7 +1,8 @@
 import axios from "axios";
 import type { User, Document, ChatMessage, Session, QueryResponse } from "../types";
 
-const api = axios.create({ baseURL: "/api" });
+const API_URL = import.meta.env.VITE_API_URL || "/api";
+const api = axios.create({ baseURL: API_URL });
 
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem("docutrust_token");

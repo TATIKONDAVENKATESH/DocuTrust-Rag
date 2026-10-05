@@ -43,9 +43,19 @@ export function useWebSocket(token: string | null): WsHookReturn {
       setLogs([]);
       setIsBusy(true);
 
-      const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-      const host = window.location.host;
-      const wsUrl = `${protocol}://${host}/ws/chat`;
+      let wsUrl = "";
+      const envApiUrl = import.meta.env.VITE_API_URL;
+      
+      if (envApiUrl && envApiUrl.startsWith("http")) {
+        // e.g. https://my-backend.onrender.com/api -> wss://my-backend.onrender.com/ws/chat
+        const wsProtocol = envApiUrl.startsWith("https") ? "wss" : "ws";
+        const hostUrl = new URL(envApiUrl).host;
+        wsUrl = `${wsProtocol}://${hostUrl}/ws/chat`;
+      } else {
+        const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+        const host = window.location.host;
+        wsUrl = `${protocol}://${host}/ws/chat`;
+      }
 
       // Close any stale socket
       if (wsRef.current) {
