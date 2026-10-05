@@ -8,11 +8,16 @@ __pycache__/
 # Node
 node_modules/
 dist/
+
+# OS / IDE
 .DS_Store
+.idea/
+.vscode/
 
 # Docker volumes
 mongo_data/
 qdrant_data/
+hf_cache/
 
 # Uploads
 /tmp/docutrust_uploads/

@@ -3,6 +3,8 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # ── System dependencies ───────────────────────────────────────────────────────
+# Install essential build tools and libraries. 
+# libglib2.0-0 and libgl1 are often required for document parsing libraries like PyMuPDF or image processing
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libglib2.0-0 \
@@ -19,6 +21,7 @@ RUN pip install --no-cache-dir \
     --index-url https://download.pytorch.org/whl/cpu
 
 # ── Install Python dependencies ───────────────────────────────────────────────
+# Copy only requirements.txt first to cache the pip install step in Docker layers
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

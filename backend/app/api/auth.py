@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, status, Depends
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 
@@ -38,7 +38,7 @@ async def register(payload: UserCreate):
         "email": payload.email,
         "full_name": payload.full_name,
         "hashed_password": get_password_hash(payload.password),
-        "created_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc),
     }
     await db["users"].insert_one(user_doc)
 

@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field, EmailStr
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 
 # ── User ────────────────────────────────────────────────────────────────────
 
@@ -14,7 +14,7 @@ class UserInDB(BaseModel):
     email: str
     full_name: str
     hashed_password: str
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class UserOut(BaseModel):
     id: str
@@ -36,7 +36,7 @@ class DocumentMetadata(BaseModel):
     size_bytes: int
     chunk_count: int
     uploaded_by: str
-    uploaded_at: datetime = Field(default_factory=datetime.utcnow)
+    uploaded_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     status: str = "processing"  # processing | ready | error
     error: Optional[str] = None
 
@@ -63,14 +63,14 @@ class ChatMessage(BaseModel):
     role: str  # user | assistant
     content: str
     citations: List[Citation] = []
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class ChatSession(BaseModel):
     id: str
     user_id: str
     title: str
     messages: List[ChatMessage] = []
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class QueryRequest(BaseModel):
     query: str

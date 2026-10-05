@@ -27,6 +27,7 @@ export function ChatPanel({ onLogsUpdate, onConnectionChange }: ChatPanelProps) 
   const { token } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
+  const [sessionId, setSessionId] = useState<string | undefined>(undefined);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const { sendQuery, logs, isConnected, isBusy, clearLogs } = useWebSocket(token);
@@ -64,8 +65,12 @@ export function ChatPanel({ onLogsUpdate, onConnectionChange }: ChatPanelProps) 
 
       sendQuery(
         q,
+        sessionId,
         // onResult
-        (answer, citations, _logs, confidence, usedWebFallback, retrievedChunks) => {
+        (answer, citations, _logs, confidence, usedWebFallback, retrievedChunks, returnedSessionId) => {
+          if (returnedSessionId) {
+             setSessionId(returnedSessionId);
+          }
           const assistantMsg: Message = {
             id: `a-${Date.now()}`,
             role: "assistant",

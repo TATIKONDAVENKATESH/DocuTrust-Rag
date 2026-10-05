@@ -52,6 +52,8 @@ def _get_llm() -> ChatGoogleGenerativeAI:
     return _llm
 
 
+# [NOTE] The RAGState represents the memory and data passed between LangGraph nodes.
+# If you add new capabilities (like a new tool or filter), add its variable to this TypedDict.
 class RAGState(TypedDict):
     query: str
     user_id: str                    # used to filter Qdrant results per user
@@ -65,6 +67,7 @@ class RAGState(TypedDict):
     agent_logs: List[str]
     iteration: int
     used_web_fallback: bool
+    chat_history: List[dict]
 
 
 # ── Retrieval ─────────────────────────────────────────────────────────────────
@@ -171,10 +174,18 @@ async def query_rewriter_node(state: RAGState) -> dict:
     logs = list(state["agent_logs"])
     logs.append("Rewriting query for better retrieval...")
 
+    chat_context = ""
+    if state.get("chat_history"):
+        chat_context = "Recent conversation history:\n"
+        for msg in state["chat_history"][-3:]:
+            chat_context += f"{msg['role'].capitalize()}: {msg['content']}\n"
+        chat_context += "\n"
+
     prompt = (
         f"The following search query did not produce sufficiently relevant document chunks.\n"
         f"Original query: {original_query}\n\n"
-        f"Rewrite the query to be more specific and retrieval-friendly. "
+        f"{chat_context}"
+        f"Rewrite the query to be more specific and retrieval-friendly, using the conversation context if necessary to resolve pronouns or implied subjects. "
         f"Return ONLY the rewritten query text, nothing else."
     )
     try:
@@ -267,9 +278,17 @@ async def answer_generator_node(state: RAGState) -> dict:
         else ""
     )
 
+    chat_context = ""
+    if state.get("chat_history"):
+        chat_context = "Recent conversation history:\n"
+        for msg in state["chat_history"][-5:]:
+            chat_context += f"{msg['role'].capitalize()}: {msg['content']}\n"
+        chat_context += "\n"
+
     prompt = (
         "You are a precise enterprise document assistant. Answer the question using ONLY "
         f"the provided excerpts. {source_note}Do not speculate beyond what the sources say.\n\n"
+        f"{chat_context}"
         f"Question: {query}\n\n"
         f"Excerpts:\n{context}\n\n"
         "Provide a thorough answer based strictly on the excerpts above. "
@@ -317,6 +336,8 @@ def should_rewrite_or_fallback(state: RAGState) -> str:
 
 # ── Graph construction ────────────────────────────────────────────────────────
 
+# [NOTE] This constructs the LangGraph (StateGraph). 
+# If you add a new node (e.g. "Query Validation"), you must add it here and define edges.
 def build_crag_graph():
     builder = StateGraph(RAGState)
     builder.add_node("retriever", retriever_node)
@@ -358,6 +379,7 @@ async def run_crag(
     query: str,
     user_id: str,
     log_callback: Optional[Callable[[str], Awaitable[None]]] = None,
+    chat_history: Optional[List[dict]] = None,
 ) -> dict:
     graph = get_crag_graph()
     initial_state: RAGState = {
@@ -373,6 +395,7 @@ async def run_crag(
         "agent_logs": [],
         "iteration": 0,
         "used_web_fallback": False,
+        "chat_history": chat_history or [],
     }
 
     seen_logs: int = 0

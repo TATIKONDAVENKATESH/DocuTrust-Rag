@@ -24,7 +24,10 @@ async def ingest_document(
     qdrant = get_qdrant()
 
     try:
-        pages = extract_text_with_pages(file_path, file_type)
+        loop = asyncio.get_running_loop()
+        # [NOTE] Run CPU-bound text extraction (PyMuPDF) in a separate thread pool.
+        # This prevents blocking the main FastAPI async event loop during large file uploads.
+        pages = await loop.run_in_executor(None, extract_text_with_pages, file_path, file_type)
         all_chunks: List[DocumentChunk] = []
         chunk_index = 0
 
@@ -103,7 +106,11 @@ async def ingest_document(
             }
             for c in all_chunks
         ]
-        await db["chunks"].insert_many(chunk_docs, ordered=False)
+        
+        # [NOTE] Insert chunks to MongoDB in batches to prevent huge memory spikes.
+        # This mirrors the batched Qdrant upserts above, ensuring stability for 1000+ page docs.
+        for i in range(0, len(chunk_docs), batch_size):
+            await db["chunks"].insert_many(chunk_docs[i: i + batch_size], ordered=False)
 
         # ── Mark document as ready ───────────────────────────────────────────
         await db["documents"].update_one(

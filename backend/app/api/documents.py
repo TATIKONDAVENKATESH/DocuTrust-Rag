@@ -1,6 +1,6 @@
 import uuid
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, BackgroundTasks
 import aiofiles
 from app.api.auth import get_current_user
@@ -58,7 +58,7 @@ async def upload_document(
         await out_file.write(content)
 
     db = get_db()
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     doc = {
         "_id": document_id,
         "filename": file.filename,

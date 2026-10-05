@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.api.auth import get_current_user
@@ -29,9 +29,15 @@ async def query(payload: QueryRequest, current_user: dict = Depends(get_current_
             "_id": session_id,
             "user_id": user_id,
             "title": payload.query[:60],
-            "created_at": datetime.utcnow(),
+            "created_at": datetime.now(timezone.utc),
         }
         await db["sessions"].insert_one(session_doc)
+
+    chat_history = []
+    if session_id:
+        cursor = db["messages"].find({"session_id": session_id}).sort("created_at", 1)
+        msgs = await cursor.to_list(length=100)
+        chat_history = [{"role": m["role"], "content": m["content"]} for m in msgs]
 
     # ── Log user message ─────────────────────────────────────────────────────
     await db["messages"].insert_one({
@@ -40,11 +46,11 @@ async def query(payload: QueryRequest, current_user: dict = Depends(get_current_
         "role": "user",
         "content": payload.query,
         "citations": [],
-        "created_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc),
     })
 
     # ── Run CRAG (now passes user_id for per-user Qdrant filtering) ──────────
-    result = await run_crag(payload.query, user_id=user_id)
+    result = await run_crag(payload.query, user_id=user_id, chat_history=chat_history)
 
     answer = result["answer"]
     citations: list[Citation] = result["citations"]
@@ -69,7 +75,7 @@ async def query(payload: QueryRequest, current_user: dict = Depends(get_current_
         "role": "assistant",
         "content": formatted_answer,
         "citations": [c.model_dump() for c in citations],
-        "created_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc),
     })
 
     # ── Log interaction trace ────────────────────────────────────────────────
@@ -80,7 +86,7 @@ async def query(payload: QueryRequest, current_user: dict = Depends(get_current_
         "query": payload.query,
         "agent_logs": logs,
         "citation_count": len(citations),
-        "created_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc),
     })
 
     return QueryResponse(

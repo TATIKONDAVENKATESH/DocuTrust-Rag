@@ -227,7 +227,7 @@ Document status flows: `processing` → `ready` | `error` (with an error message
 | POST | `/api/chat/query` | JWT | REST query — runs CRAG, returns full response |
 | GET | `/api/chat/sessions` | JWT | List user's chat sessions |
 | GET | `/api/chat/sessions/{id}/messages` | JWT | Messages in a session |
-| WS | `/ws/chat?token=<JWT>` | JWT (query param) | WebSocket — streams CRAG agent logs in real time |
+| WS | `/ws/chat` | JWT (auth frame) | WebSocket — streams CRAG agent logs in real time, requires JSON auth frame on connect |
 | GET | `/health` | — | Service health + active config values |
 
 Interactive API docs are available at `http://localhost:8000/docs` (Swagger UI).
@@ -241,3 +241,8 @@ Interactive API docs are available at `http://localhost:8000/docs` (Swagger UI).
 - **HuggingFace models** are cached in a named Docker volume (`hf_cache`) so they survive container restarts without re-downloading.
 - **Per-user isolation** is enforced at the Qdrant query level via a payload filter on `user_id`, so users can only retrieve their own documents.
 - The `RELEVANCE_THRESHOLD` default was lowered to `0.20` (from `0.5` in earlier iterations) to reduce over-triggering of query rewrites on legitimate documents.
+- **Conversational Memory**: The CRAG pipeline receives previous chat history, allowing it to answer contextual follow-up questions.
+- **Async & Threading**: Heavy CPU-bound tasks like PDF parsing are dispatched to a thread pool executor to prevent blocking the asynchronous FastAPI event loop.
+- **Database & WebSockets**: MongoDB chunk inserts are batched to prevent memory spikes. WebSockets use secure JSON auth frames (instead of URL parameters) and automatically persist chat messages to MongoDB.
+- **Local Testing**: Ensure you have `TAVILY_API_KEY` and `GEMINI_API_KEY` in your `.env`. Always test changes locally using `docker compose up --build`.
+- **Inline Explanations**: Look for `[NOTE]` comments throughout the codebase (especially in `workflow.py`, `websocket.py`, and `ingestion.py`) explaining complex logic like the LangGraph state and WebSocket session handling.

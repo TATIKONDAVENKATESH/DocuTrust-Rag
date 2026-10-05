@@ -7,7 +7,12 @@ _client: AsyncQdrantClient = None
 
 async def connect_qdrant() -> None:
     global _client
-    _client = AsyncQdrantClient(host=settings.QDRANT_HOST, port=settings.QDRANT_PORT)
+    if settings.QDRANT_URL:
+        # Qdrant Cloud (or any HTTPS endpoint) — auth via API key.
+        _client = AsyncQdrantClient(url=settings.QDRANT_URL, api_key=settings.QDRANT_API_KEY or None)
+    else:
+        # Self-hosted (docker-compose) — plain host/port, no auth.
+        _client = AsyncQdrantClient(host=settings.QDRANT_HOST, port=settings.QDRANT_PORT)
     await _ensure_collection()
 
 

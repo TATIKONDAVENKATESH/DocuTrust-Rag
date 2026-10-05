@@ -6,8 +6,13 @@ class Settings(BaseSettings):
     MONGODB_DB: str = "docutrust"
 
     # ── Qdrant ───────────────────────────────────────────────────────────────
+    # Self-hosted (docker-compose) uses QDRANT_HOST/QDRANT_PORT.
+    # Qdrant Cloud uses QDRANT_URL (https://...) + QDRANT_API_KEY instead —
+    # if QDRANT_URL is set, it takes priority (see app/db/qdrant.py).
     QDRANT_HOST: str = "qdrant"
     QDRANT_PORT: int = 6333
+    QDRANT_URL: str = ""
+    QDRANT_API_KEY: str = ""
     QDRANT_COLLECTION: str = "documents"
 
     # ── CORS ─────────────────────────────────────────────────────────────────────

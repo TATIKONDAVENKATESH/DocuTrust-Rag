@@ -7,14 +7,15 @@ type OnResultFn = (
   logs: string[],
   confidence: number,
   usedWebFallback: boolean,
-  retrievedChunks: RetrievedChunkPreview[]
+  retrievedChunks: RetrievedChunkPreview[],
+  sessionId?: string
 ) => void;
 
 interface WsHookReturn {
   logs: string[];
   isConnected: boolean;
   isBusy: boolean;
-  sendQuery: (query: string, onResult: OnResultFn, onError: (msg: string) => void) => void;
+  sendQuery: (query: string, sessionId: string | undefined, onResult: OnResultFn, onError: (msg: string) => void) => void;
   clearLogs: () => void;
 }
 
@@ -30,7 +31,7 @@ export function useWebSocket(token: string | null): WsHookReturn {
   const collectedLogsRef = useRef<string[]>([]);
 
   const sendQuery = useCallback(
-    (query: string, onResult: OnResultFn, onError: (msg: string) => void) => {
+    (query: string, sessionId: string | undefined, onResult: OnResultFn, onError: (msg: string) => void) => {
       if (!token) {
         onError("Not authenticated.");
         return;
@@ -44,7 +45,7 @@ export function useWebSocket(token: string | null): WsHookReturn {
 
       const protocol = window.location.protocol === "https:" ? "wss" : "ws";
       const host = window.location.host;
-      const wsUrl = `${protocol}://${host}/ws/chat?token=${token}`;
+      const wsUrl = `${protocol}://${host}/ws/chat`;
 
       // Close any stale socket
       if (wsRef.current) {
@@ -62,7 +63,10 @@ export function useWebSocket(token: string | null): WsHookReturn {
 
       ws.onopen = () => {
         setIsConnected(true);
-        ws.send(JSON.stringify({ query }));
+        // [NOTE] Send auth frame first (avoids sending JWT in the URL query string)
+        ws.send(JSON.stringify({ type: "auth", token }));
+        // Then send query, including the optional sessionId for conversational memory
+        ws.send(JSON.stringify({ query, session_id: sessionId }));
       };
 
       ws.onmessage = (event: MessageEvent) => {
@@ -78,6 +82,13 @@ export function useWebSocket(token: string | null): WsHookReturn {
         if (msg.type === "start") {
           collectedLogsRef.current = [];
           setLogs([]);
+          // store session id for result callback? The backend also sends it if we need, but let's store it locally if we want.
+          // For now, we will extract it from the result if needed or just pass it in result.
+          // Wait, 'msg' type might not have session_id. Let's just handle it.
+          if ((msg as any).session_id) {
+             // We can keep track of the current session ID in a ref
+             ws.sessionId = (msg as any).session_id;
+          }
         } else if (msg.type === "log") {
           collectedLogsRef.current = [...collectedLogsRef.current, msg.message];
           setLogs([...collectedLogsRef.current]);
@@ -89,7 +100,8 @@ export function useWebSocket(token: string | null): WsHookReturn {
             msg.agent_logs,
             msg.confidence,
             msg.used_web_fallback,
-            msg.retrieved_chunks
+            msg.retrieved_chunks,
+            (ws as any).sessionId
           );
         } else if (msg.type === "error") {
           setIsBusy(false);
