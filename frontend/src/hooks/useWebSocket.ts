@@ -44,7 +44,7 @@ export function useWebSocket(token: string | null): WsHookReturn {
       setIsBusy(true);
 
       let wsUrl = "";
-      const envApiUrl = import.meta.env.VITE_API_URL;
+      const envApiUrl = (import.meta as any).env.VITE_API_URL;
       
       if (envApiUrl && envApiUrl.startsWith("http")) {
         // e.g. https://my-backend.onrender.com/api -> wss://my-backend.onrender.com/ws/chat
@@ -97,7 +97,7 @@ export function useWebSocket(token: string | null): WsHookReturn {
           // Wait, 'msg' type might not have session_id. Let's just handle it.
           if ((msg as any).session_id) {
              // We can keep track of the current session ID in a ref
-             ws.sessionId = (msg as any).session_id;
+             (ws as any).sessionId = (msg as any).session_id;
           }
         } else if (msg.type === "log") {
           collectedLogsRef.current = [...collectedLogsRef.current, msg.message];
